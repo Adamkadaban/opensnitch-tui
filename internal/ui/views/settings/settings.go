@@ -2,7 +2,9 @@ package settings
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,6 +28,7 @@ type Model struct {
 	actionIdx       int
 	durationIdx     int
 	targetIdx       int
+	timeoutIdx      int
 	alertsInterrupt bool
 	status          string
 }
@@ -36,10 +39,11 @@ const (
 	fieldAction field = iota
 	fieldDuration
 	fieldTarget
+	fieldPromptTimeout
 	fieldAlertsInterrupt
 )
 
-const settingsFieldCount = 4
+const settingsFieldCount = 5
 
 type option struct {
 	label string
@@ -66,6 +70,14 @@ var promptTargets = []option{
 	{label: "Destination host", value: "dest.host"},
 	{label: "Destination IP", value: "dest.ip"},
 	{label: "Destination port", value: "dest.port"},
+}
+
+var promptTimeouts = []option{
+	{label: "15s", value: "15"},
+	{label: "30s", value: "30"},
+	{label: "60s", value: "60"},
+	{label: "120s", value: "120"},
+	{label: "300s", value: "300"},
 }
 
 // New constructs a settings view model.
@@ -114,6 +126,7 @@ func (m *Model) View() string {
 		m.renderRow("Default action", promptActions, m.actionIdx, m.focus == fieldAction),
 		m.renderRow("Default duration", promptDurations, m.durationIdx, m.focus == fieldDuration),
 		m.renderRow("Default target", promptTargets, m.targetIdx, m.focus == fieldTarget),
+		m.renderRow("Prompt timeout", promptTimeouts, m.timeoutIdx, m.focus == fieldPromptTimeout),
 	}
 	alerts := []string{
 		m.renderToggle("Alerts interrupt", m.alertsInterrupt, m.focus == fieldAlertsInterrupt),
@@ -137,6 +150,11 @@ func (m *Model) syncSelection() {
 	m.actionIdx = optionIndex(promptActions, snapshot.Settings.DefaultPromptAction)
 	m.durationIdx = optionIndex(promptDurations, snapshot.Settings.DefaultPromptDuration)
 	m.targetIdx = optionIndex(promptTargets, snapshot.Settings.DefaultPromptTarget)
+	timeoutSeconds := int(snapshot.Settings.PromptTimeout / time.Second)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
+	}
+	m.timeoutIdx = optionIndex(promptTimeouts, fmt.Sprintf("%d", timeoutSeconds))
 	m.alertsInterrupt = snapshot.Settings.AlertsInterrupt
 }
 
@@ -152,6 +170,8 @@ func (m *Model) persistFocused() {
 		m.persistDuration()
 	case fieldTarget:
 		m.persistTarget()
+	case fieldPromptTimeout:
+		m.persistPromptTimeout()
 	case fieldAlertsInterrupt:
 		m.persistAlertsInterrupt()
 	}
@@ -172,6 +192,10 @@ func (m *Model) persistAll() {
 	}
 	if _, err := m.saveTarget(); err != nil {
 		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
+		return
+	}
+	if _, err := m.savePromptTimeout(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save timeout: %v", err))
 		return
 	}
 	if _, err := m.saveAlertsInterrupt(m.alertsInterrupt); err != nil {
@@ -214,6 +238,8 @@ func (m *Model) shiftSelection(delta int) {
 		m.durationIdx = wrap(m.durationIdx+delta, len(promptDurations))
 	case fieldTarget:
 		m.targetIdx = wrap(m.targetIdx+delta, len(promptTargets))
+	case fieldPromptTimeout:
+		m.timeoutIdx = wrap(m.timeoutIdx+delta, len(promptTimeouts))
 	case fieldAlertsInterrupt:
 		current := 0
 		if m.alertsInterrupt {
@@ -245,6 +271,14 @@ func (m *Model) persistTarget() {
 		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
 	} else {
 		m.status = m.theme.Success.Render(fmt.Sprintf("Default target set to %s", value))
+	}
+}
+
+func (m *Model) persistPromptTimeout() {
+	if seconds, err := m.savePromptTimeout(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save timeout: %v", err))
+	} else {
+		m.status = m.theme.Success.Render(fmt.Sprintf("Prompt timeout set to %ds", seconds))
 	}
 }
 
@@ -293,6 +327,19 @@ func (m *Model) saveTarget() (string, error) {
 	m.targetIdx = optionIndex(promptTargets, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.DefaultPromptTarget = value
+	})
+	return value, nil
+}
+
+func (m *Model) savePromptTimeout() (int, error) {
+	seconds := optionSeconds(promptTimeouts[m.timeoutIdx])
+	value, err := m.controller.SetPromptTimeout(seconds)
+	if err != nil {
+		return 0, err
+	}
+	m.timeoutIdx = optionIndex(promptTimeouts, fmt.Sprintf("%d", value))
+	m.updateSettings(func(settings *state.Settings) {
+		settings.PromptTimeout = time.Duration(value) * time.Second
 	})
 	return value, nil
 }
@@ -360,4 +407,12 @@ func optionIndex(options []option, value string) int {
 		}
 	}
 	return 0
+}
+
+func optionSeconds(opt option) int {
+	seconds, err := strconv.Atoi(opt.value)
+	if err != nil {
+		return 30
+	}
+	return seconds
 }

@@ -18,6 +18,7 @@ type SettingsManager interface {
 	SetDefaultPromptDuration(duration string) (string, error)
 	SetDefaultPromptTarget(target string) (string, error)
 	SetAlertsInterrupt(enabled bool) (bool, error)
+	SetPromptTimeout(seconds int) (int, error)
 }
 
 // PromptDecision captures an operator's selection for a pending prompt.

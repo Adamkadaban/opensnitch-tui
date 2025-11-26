@@ -107,6 +107,7 @@ type Settings struct {
 	DefaultPromptAction   string
 	DefaultPromptDuration string
 	DefaultPromptTarget   string
+	PromptTimeout         time.Duration
 	AlertsInterrupt       bool
 }
 

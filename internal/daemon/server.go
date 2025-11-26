@@ -71,10 +71,9 @@ type promptResponse struct {
 	err  error
 }
 
-var promptTimeout = 30 * time.Second
-
 const (
-	ruleTypeSimple = "simple"
+	defaultPromptTimeout = 30 * time.Second
+	ruleTypeSimple       = "simple"
 )
 
 const (
@@ -221,13 +220,14 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 	nodeID := peerKey(ctx)
 	nodeName := s.nodeName(nodeID)
 	now := time.Now()
+	timeout := s.promptTimeout()
 	prompt := state.Prompt{
 		ID:          fmt.Sprintf("%s:%d", nodeID, now.UnixNano()),
 		NodeID:      nodeID,
 		NodeName:    nodeName,
 		Connection:  convertConnection(conn),
 		RequestedAt: now,
-		ExpiresAt:   now.Add(promptTimeout),
+		ExpiresAt:   now.Add(timeout),
 	}
 	req := &promptRequest{
 		id:       prompt.ID,
@@ -238,7 +238,7 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 	defer s.unregisterPrompt(req.id)
 
 	s.store.AddPrompt(prompt)
-	timer := time.NewTimer(promptTimeout)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	select {
@@ -666,4 +666,15 @@ func peerAddress(ctx context.Context) string {
 		return p.Addr.String()
 	}
 	return "unknown"
+}
+
+func (s *Server) promptTimeout() time.Duration {
+	if s == nil || s.store == nil {
+		return defaultPromptTimeout
+	}
+	timeout := s.store.Snapshot().Settings.PromptTimeout
+	if timeout <= 0 {
+		return defaultPromptTimeout
+	}
+	return timeout
 }

@@ -37,6 +37,7 @@ func NewStore() *Store {
 				DefaultPromptAction:   config.DefaultPromptAction,
 				DefaultPromptDuration: config.DefaultPromptDuration,
 				DefaultPromptTarget:   config.DefaultPromptTarget,
+				PromptTimeout:         time.Duration(config.DefaultPromptTimeoutSeconds) * time.Second,
 				AlertsInterrupt:       config.DefaultAlertsInterrupt,
 			},
 			Prompts: []Prompt{},

@@ -174,12 +174,11 @@ func TestServerAskRuleTimeoutAddsRule(t *testing.T) {
 	nodeAddr := "1.2.3.4:6000"
 	nodeID := "tcp://" + nodeAddr
 	store.SetStats(state.Stats{NodeID: nodeID})
+	settings := store.Snapshot().Settings
+	settings.PromptTimeout = 10 * time.Millisecond
+	store.SetSettings(settings)
 	srv := New(store, Options{})
 	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &testAddr{network: "tcp", value: nodeAddr}})
-
-	prevTimeout := promptTimeout
-	promptTimeout = 10 * time.Millisecond
-	defer func() { promptTimeout = prevTimeout }()
 
 	conn := &pb.Connection{
 		ProcessPath: "/usr/bin/curl",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/sync/errgroup"
@@ -37,6 +38,7 @@ func Run(ctx context.Context, opts Options) error {
 	cfg.DefaultPromptAction = config.NormalizePromptAction(cfg.DefaultPromptAction)
 	cfg.DefaultPromptDuration = config.NormalizePromptDuration(cfg.DefaultPromptDuration)
 	cfg.DefaultPromptTarget = config.NormalizePromptTarget(cfg.DefaultPromptTarget)
+	cfg.PromptTimeoutSeconds = config.NormalizePromptTimeoutSeconds(cfg.PromptTimeoutSeconds)
 
 	palette := theme.New(theme.Options{Override: opts.Theme, Preferred: cfg.Theme})
 	store := state.NewStore()
@@ -45,6 +47,7 @@ func Run(ctx context.Context, opts Options) error {
 		DefaultPromptAction:   cfg.DefaultPromptAction,
 		DefaultPromptDuration: cfg.DefaultPromptDuration,
 		DefaultPromptTarget:   cfg.DefaultPromptTarget,
+		PromptTimeout:         time.Duration(cfg.PromptTimeoutSeconds) * time.Second,
 		AlertsInterrupt:       cfg.AlertsInterrupt,
 	})
 

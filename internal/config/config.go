@@ -22,6 +22,7 @@ type Config struct {
 	DefaultPromptAction   string `yaml:"default_prompt_action"`
 	DefaultPromptDuration string `yaml:"default_prompt_duration"`
 	DefaultPromptTarget   string `yaml:"default_prompt_target"`
+	PromptTimeoutSeconds  int    `yaml:"prompt_timeout_seconds"`
 	AlertsInterrupt       bool   `yaml:"alerts_interrupt"`
 	Nodes                 []Node `yaml:"nodes"`
 }
@@ -69,6 +70,7 @@ func Default() Config {
 		DefaultPromptAction:   DefaultPromptAction,
 		DefaultPromptDuration: DefaultPromptDuration,
 		DefaultPromptTarget:   DefaultPromptTarget,
+		PromptTimeoutSeconds:  DefaultPromptTimeoutSeconds,
 		AlertsInterrupt:       DefaultAlertsInterrupt,
 		Nodes:                 []Node{},
 	}
@@ -94,6 +96,7 @@ func resolvePath(path string) (string, error) {
 const DefaultPromptAction = "deny"
 const DefaultPromptDuration = "once"
 const DefaultPromptTarget = "process.path"
+const DefaultPromptTimeoutSeconds = 30
 const DefaultAlertsInterrupt = true
 
 // NormalizePromptAction ensures stored prompts actions stay within supported values.
@@ -124,6 +127,17 @@ func NormalizePromptTarget(target string) string {
 	default:
 		return DefaultPromptTarget
 	}
+}
+
+// NormalizePromptTimeoutSeconds ensures a reasonable timeout window.
+func NormalizePromptTimeoutSeconds(seconds int) int {
+	if seconds < 5 {
+		return DefaultPromptTimeoutSeconds
+	}
+	if seconds > 600 {
+		return 600
+	}
+	return seconds
 }
 
 // ResolvePath returns the concrete config file path.

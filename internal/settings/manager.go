@@ -69,6 +69,19 @@ func (m *Manager) SetAlertsInterrupt(enabled bool) (bool, error) {
 	return m.cfg.AlertsInterrupt, nil
 }
 
+// SetPromptTimeout updates the default prompt timeout duration in seconds.
+func (m *Manager) SetPromptTimeout(seconds int) (int, error) {
+	normalized := config.NormalizePromptTimeoutSeconds(seconds)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.PromptTimeoutSeconds = normalized
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return 0, err
+	}
+	return normalized, nil
+}
+
 // Config returns a copy of the managed config.
 func (m *Manager) Config() config.Config {
 	m.mu.Lock()
