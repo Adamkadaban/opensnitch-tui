@@ -23,12 +23,10 @@ func New(title, message string, th theme.Theme) view.Model {
 
 func (m *Model) Init() tea.Cmd { return nil }
 
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m, nil
-}
+func (m *Model) Update(_ tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
 
 func (m *Model) View() string {
-	return m.theme.Body.Copy().Width(m.width).Height(max(3, m.height)).Render(m.message)
+	return m.theme.Body.Width(max(1, m.width)).Height(max(3, m.height)).Render(m.message)
 }
 
 func (m *Model) Title() string { return m.title }
@@ -40,11 +38,4 @@ func (m *Model) SetSize(width, height int) {
 
 func (m *Model) SetTheme(th theme.Theme) {
 	m.theme = th
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

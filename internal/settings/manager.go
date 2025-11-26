@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/config"
@@ -34,7 +35,7 @@ func (m *Manager) SetTheme(name string) (string, error) {
 
 // SetDefaultPromptAction stores the normalized default prompt action and writes it to disk.
 func (m *Manager) SetDefaultPromptAction(action string) (string, error) {
-	normalized := config.NormalizePromptAction(action)
+	normalized := config.NormalizePromptAction(strings.ToLower(strings.TrimSpace(action)))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -47,7 +48,7 @@ func (m *Manager) SetDefaultPromptAction(action string) (string, error) {
 
 // SetDefaultPromptDuration stores the normalized default prompt duration and writes it to disk.
 func (m *Manager) SetDefaultPromptDuration(duration string) (string, error) {
-	normalized := config.NormalizePromptDuration(duration)
+	normalized := config.NormalizePromptDuration(strings.ToLower(strings.TrimSpace(duration)))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -60,7 +61,7 @@ func (m *Manager) SetDefaultPromptDuration(duration string) (string, error) {
 
 // SetDefaultPromptTarget stores the normalized default prompt target and writes it to disk.
 func (m *Manager) SetDefaultPromptTarget(target string) (string, error) {
-	normalized := config.NormalizePromptTarget(target)
+	normalized := config.NormalizePromptTarget(strings.ToLower(strings.TrimSpace(target)))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

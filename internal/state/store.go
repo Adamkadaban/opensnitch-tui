@@ -110,6 +110,7 @@ func (s *Store) UpdateNodeStatus(id string, status NodeStatus, message string, l
 			Message:  message,
 			LastSeen: lastSeen,
 		})
+		s.notifyLocked()
 		return
 	}
 	node := s.snapshot.Nodes[idx]

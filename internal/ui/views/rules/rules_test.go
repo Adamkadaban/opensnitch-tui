@@ -127,16 +127,16 @@ func TestRulesTableWindowing(t *testing.T) {
 func TestRulesTableCapacityClamp(t *testing.T) {
 	model := New(state.NewStore(), theme.New(theme.Options{}), nil).(*Model)
 	model.SetSize(80, 0)
-	if cap := model.tableCapacity(); cap != 5 {
-		t.Fatalf("expected default capacity fallback of 5, got %d", cap)
+	if capacity := model.tableCapacity(); capacity != 5 {
+		t.Fatalf("expected default capacity fallback of 5, got %d", capacity)
 	}
 	model.SetSize(80, 7)
-	if cap := model.tableCapacity(); cap != 3 {
-		t.Fatalf("expected minimum capacity of 3, got %d", cap)
+	if capacity := model.tableCapacity(); capacity != 3 {
+		t.Fatalf("expected minimum capacity of 3, got %d", capacity)
 	}
 	model.SetSize(80, 22)
-	if cap := model.tableCapacity(); cap != 8 {
-		t.Fatalf("expected capped capacity of 8, got %d", cap)
+	if capacity := model.tableCapacity(); capacity != 8 {
+		t.Fatalf("expected capped capacity of 8, got %d", capacity)
 	}
 }
 

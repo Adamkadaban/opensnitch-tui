@@ -22,6 +22,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
+	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
 // Options configure the daemon RPC server.
@@ -590,14 +591,7 @@ func displayConnectionLabel(conn state.Connection) string {
 	if dest == "" {
 		dest = conn.DstIP
 	}
-	return fmt.Sprintf("%s -> %s:%d", fallbackString(conn.ProcessPath, "unknown"), fallbackString(dest, "destination"), conn.DstPort)
-}
-
-func fallbackString(value, def string) string {
-	if value == "" {
-		return def
-	}
-	return value
+	return fmt.Sprintf("%s -> %s:%d", util.Fallback(conn.ProcessPath, "unknown"), util.Fallback(dest, "destination"), conn.DstPort)
 }
 
 func normalizePromptAction(action controller.PromptAction) controller.PromptAction {

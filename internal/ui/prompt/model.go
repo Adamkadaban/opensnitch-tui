@@ -12,6 +12,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
+	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
 // Model renders and handles interactive connection prompts.
@@ -184,9 +185,9 @@ func (m *Model) View() string {
 	}
 	command := strings.Join(prompt.Connection.ProcessArgs, " ")
 	info := []string{
-		fmt.Sprintf("Process: %s", fallback(prompt.Connection.ProcessPath, "unknown")),
-		fmt.Sprintf("Command: %s", fallback(command, "-")),
-		fmt.Sprintf("Destination: %s:%d (%s)", fallback(dest, "unknown"), prompt.Connection.DstPort, prompt.Connection.Protocol),
+		fmt.Sprintf("Process: %s", util.Fallback(prompt.Connection.ProcessPath, "unknown")),
+		fmt.Sprintf("Command: %s", util.Fallback(command, "-")),
+		fmt.Sprintf("Destination: %s:%d (%s)", util.Fallback(dest, "unknown"), prompt.Connection.DstPort, prompt.Connection.Protocol),
 		fmt.Sprintf("User %d · PID %d", prompt.Connection.UserID, prompt.Connection.ProcessID),
 	}
 
@@ -223,11 +224,6 @@ func (m *Model) View() string {
 	)
 
 	return lipgloss.Place(m.width, max(10, m.height-2), lipgloss.Center, lipgloss.Center, m.theme.Card.Width(min(m.width-4, 96)).Render(body))
-}
-
-func (m *Model) promptState() (state.Prompt, []targetOption, *formState, bool) {
-	snapshot := m.store.Snapshot()
-	return m.promptStateFromSnapshot(snapshot)
 }
 
 func (m *Model) promptStateFromSnapshot(snapshot state.Snapshot) (state.Prompt, []targetOption, *formState, bool) {
@@ -296,11 +292,11 @@ func (m *Model) syncForms(prompts []state.Prompt) {
 func (m *Model) stepSelection(delta int, form *formState, targets int) {
 	switch m.focus {
 	case fieldAction:
-		form.action = wrapIndex(form.action, delta, len(actionOptions))
+		form.action = util.WrapIndex(form.action, delta, len(actionOptions))
 	case fieldDuration:
-		form.duration = wrapIndex(form.duration, delta, len(durationOptions))
+		form.duration = util.WrapIndex(form.duration, delta, len(durationOptions))
 	case fieldTarget:
-		form.target = wrapIndex(form.target, delta, max(1, targets))
+		form.target = util.WrapIndex(form.target, delta, max(1, targets))
 	}
 }
 
@@ -330,7 +326,7 @@ func (m *Model) shiftPrompt(delta int) {
 	if len(snapshot.Prompts) == 0 {
 		return
 	}
-	m.promptIdx = wrapIndex(m.promptIdx, delta, len(snapshot.Prompts))
+	m.promptIdx = util.WrapIndex(m.promptIdx, delta, len(snapshot.Prompts))
 }
 
 func (m *Model) renderChoices(label string, options []string, selected int, focused bool) string {
@@ -398,17 +394,6 @@ func mapTargetLabels(opts []targetOption) []string {
 	return labels
 }
 
-func wrapIndex(current, delta, length int) int {
-	if length <= 0 {
-		return 0
-	}
-	next := (current + delta) % length
-	if next < 0 {
-		next += length
-	}
-	return next
-}
-
 func (m *Model) defaultActionIndex() int {
 	snapshot := m.store.Snapshot()
 	current := snapshot.Settings.DefaultPromptAction
@@ -455,23 +440,4 @@ func (m *Model) shouldDisplayPrompts(snapshot state.Snapshot) bool {
 	return snapshot.ActiveView == state.ViewAlerts
 }
 
-func fallback(value, def string) string {
-	if strings.TrimSpace(value) == "" {
-		return def
-	}
-	return value
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+// (fallback, min, max replaced by util helpers and Go built-ins)

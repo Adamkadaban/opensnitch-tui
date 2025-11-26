@@ -12,6 +12,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
+	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
 type Model struct {
@@ -36,7 +37,7 @@ const (
 	tableChrome        = 8
 	columnGap          = 1
 	minCursorWidth     = 2
-	minNameWidth       = 18
+	minNameWidth       = 8
 	minActionWidth     = 6
 	minDurationWidth   = 8
 	minStatusWidth     = 8
@@ -148,7 +149,7 @@ func (m *Model) renderNodes(snapshot state.Snapshot) string {
 	nodes := snapshot.Nodes
 	items := make([]string, 0, len(nodes))
 	for idx, node := range nodes {
-		label := fmt.Sprintf("%s (%d)", displayName(node), len(snapshot.Rules[node.ID]))
+		label := fmt.Sprintf("%s (%d)", util.DisplayName(node), len(snapshot.Rules[node.ID]))
 		items = append(items, m.theme.RenderTab(label, idx == m.nodeIdx))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, items...)
@@ -160,11 +161,11 @@ func (m *Model) renderRulesTable(rules []state.Rule) string {
 	}
 	layout := m.tableColumns()
 	start := min(m.tableOffset, max(0, len(rules)-1))
-	cap := m.tableCapacity()
-	if start > len(rules)-cap {
-		start = max(0, len(rules)-cap)
+	capacity := m.tableCapacity()
+	if start > len(rules)-capacity {
+		start = max(0, len(rules)-capacity)
 	}
-	end := min(len(rules), start+cap)
+	end := min(len(rules), start+capacity)
 	moreBelow := end < len(rules)
 	gap := strings.Repeat(" ", columnGap)
 	rows := make([]string, 0, (end-start)+1)
@@ -194,11 +195,11 @@ func renderCaretRow(width int, style lipgloss.Style) string {
 			glyphs[pos] = 'v'
 		}
 	}
-	return style.Copy().Render(string(glyphs))
+	return style.Render(string(glyphs))
 }
 
 func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
-	headerStyle := m.theme.Header.Copy().Bold(true).Padding(0)
+	headerStyle := m.theme.Header.Bold(true).Padding(0)
 	labels := []string{"", "NAME", "ACTION", "DURATION", "STATUS", "PRECEDENCE", "NOLOG", "OPERATOR"}
 	widths := []int{layout.cursor, layout.name, layout.action, layout.duration, layout.status, layout.precedence, layout.noLog, layout.operator}
 	cells := make([]string, len(labels))
@@ -254,16 +255,16 @@ func (m *Model) renderRuleDetail(rules []state.Rule) string {
 	inner := max(20, m.contentWidth())
 	fmtLine := func(label, value string) string {
 		line := fmt.Sprintf("%s: %s", label, value)
-		return truncateString(line, inner)
+		return util.TruncateString(line, inner)
 	}
-	desc := fallback(rule.Description, "NONE")
+	desc := util.Fallback(rule.Description, "NONE")
 	created := "unknown"
 	if !rule.CreatedAt.IsZero() {
 		created = rule.CreatedAt.UTC().Format(time.RFC3339)
 	}
 	lines := []string{
-		fmtLine("Name", fallback(rule.Name, "-")),
-		fmtLine("Node", fallback(rule.NodeID, "-")),
+		fmtLine("Name", util.Fallback(rule.Name, "-")),
+		fmtLine("Node", util.Fallback(rule.NodeID, "-")),
 		fmtLine("Description", desc),
 		fmtLine("Action", colorRuleAction(m.theme, rule.Action)),
 		fmtLine("Duration", colorDuration(m.theme, rule.Duration)),
@@ -285,21 +286,21 @@ func (m *Model) renderStatus() string {
 }
 
 func (m *Model) wrap(body string) string {
-	return m.theme.Body.Copy().Width(m.width).Height(max(5, m.height)).Render(body)
+	return m.theme.Body.Width(max(1, m.width)).Height(max(5, m.height)).Render(body)
 }
 
 func (m *Model) tableCapacity() int {
 	if m.height <= 0 {
 		return defaultTableRows
 	}
-	cap := m.height - tableChrome
-	if cap < minTableRows {
-		cap = minTableRows
+	capacity := m.height - tableChrome
+	if capacity < minTableRows {
+		capacity = minTableRows
 	}
-	if cap > maxTableRows {
-		cap = maxTableRows
+	if capacity > maxTableRows {
+		capacity = maxTableRows
 	}
-	return cap
+	return capacity
 }
 
 func (m *Model) tableColumns() tableLayout {
@@ -409,30 +410,8 @@ func padAndStyle(style lipgloss.Style, text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	content := padString(truncateString(text, width), width)
+	content := util.PadString(util.TruncateString(text, width), width)
 	return style.Render(content)
-}
-
-func padString(value string, width int) string {
-	padding := width - len([]rune(value))
-	if padding > 0 {
-		return value + strings.Repeat(" ", padding)
-	}
-	return value
-}
-
-func truncateString(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	if width <= 3 {
-		return string(runes[:width])
-	}
-	return string(runes[:width-3]) + "..."
 }
 
 func (m *Model) clampSelection(snapshot state.Snapshot) {
@@ -457,16 +436,16 @@ func (m *Model) clampSelection(snapshot state.Snapshot) {
 	if m.ruleIdx >= len(rules) {
 		m.ruleIdx = len(rules) - 1
 	}
-	cap := m.tableCapacity()
-	if len(rules) <= cap {
+	capacity := m.tableCapacity()
+	if len(rules) <= capacity {
 		m.tableOffset = 0
 		return
 	}
 	if m.ruleIdx < m.tableOffset {
 		m.tableOffset = m.ruleIdx
 	}
-	if m.ruleIdx >= m.tableOffset+cap {
-		m.tableOffset = m.ruleIdx - cap + 1
+	if m.ruleIdx >= m.tableOffset+capacity {
+		m.tableOffset = m.ruleIdx - capacity + 1
 	}
 }
 
@@ -521,10 +500,10 @@ func (m *Model) requestDelete(snapshot state.Snapshot) {
 
 func (m *Model) renderActionResult(err error, action string, node state.Node, rule state.Rule) {
 	if err != nil {
-		m.statusLine = m.theme.Danger.Render(fmt.Sprintf("Failed to %s %s on %s: %v", action, rule.Name, displayName(node), err))
+		m.statusLine = m.theme.Danger.Render(fmt.Sprintf("Failed to %s %s on %s: %v", action, rule.Name, util.DisplayName(node), err))
 		return
 	}
-	m.statusLine = m.theme.Success.Render(fmt.Sprintf("Requested %s %s on %s", action, rule.Name, displayName(node)))
+	m.statusLine = m.theme.Success.Render(fmt.Sprintf("Requested %s %s on %s", action, rule.Name, util.DisplayName(node)))
 }
 
 func describeOperator(op state.RuleOperator) string {
@@ -548,20 +527,6 @@ func describeOperator(op state.RuleOperator) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-func displayName(node state.Node) string {
-	if node.Name != "" {
-		return node.Name
-	}
-	return node.Address
-}
-
-func fallback(value, def string) string {
-	if value == "" {
-		return def
-	}
-	return value
-}
-
 func boolLabel(v bool) string {
 	if v {
 		return "yes"
@@ -570,7 +535,7 @@ func boolLabel(v bool) string {
 }
 
 func stripBackground(style lipgloss.Style) lipgloss.Style {
-	return style.Copy().UnsetBackground()
+	return style.UnsetBackground()
 }
 
 func (m *Model) rowStripeColor(rowIdx int) lipgloss.Color {
@@ -621,18 +586,4 @@ func colorDuration(th theme.Theme, duration string) string {
 	default:
 		return th.Body.Render(duration)
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

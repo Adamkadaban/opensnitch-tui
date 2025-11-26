@@ -3,7 +3,6 @@ package dashboard
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -11,6 +10,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
+	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
 // Model renders the high-level telemetry summary.
@@ -30,9 +30,7 @@ func New(store *state.Store, th theme.Theme) view.Model {
 func (m *Model) Init() tea.Cmd { return nil }
 
 // Update satisfies tea.Model. The dashboard currently reacts only to store updates.
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m, nil
-}
+func (m *Model) Update(_ tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
 
 // View renders the dashboard contents.
 func (m *Model) View() string {
@@ -61,7 +59,7 @@ func (m *Model) View() string {
 	meta := m.theme.Subtle.Render(m.metaLine(stats))
 	body := lipgloss.JoinVertical(lipgloss.Left, row, insights, secondary, meta)
 
-	return m.theme.Body.Copy().Width(m.width).Height(max(3, m.height)).Render(body)
+	return m.theme.Body.Width(max(1, m.width)).Height(max(3, m.height)).Render(body)
 }
 
 // Title returns the tab label for this view.
@@ -82,7 +80,7 @@ func (m *Model) renderStat(label string, value uint64) string {
 	const cardOverhead = 8 // border (2) + padding (4) + margin (2)
 	cardWidth := max(16, m.width/4-cardOverhead)
 	content := fmt.Sprintf("%d\n%s", value, label)
-	return m.theme.Card.Copy().Width(cardWidth).Render(content)
+	return m.theme.Card.Width(cardWidth).Render(content)
 }
 
 func (m *Model) renderTraffic(stats state.Stats, cardWidth int) string {
@@ -107,14 +105,14 @@ func (m *Model) renderTraffic(stats state.Stats, cardWidth int) string {
 	if total == 0 {
 		body = append(body, m.theme.Subtle.Render("No traffic yet"))
 	}
-	return m.theme.Card.Copy().Width(cardWidth).Render(strings.Join(body, "\n"))
+	return m.theme.Card.Width(cardWidth).Render(strings.Join(body, "\n"))
 }
 
 func (m *Model) renderTopList(title string, buckets []state.StatBucket, width int) string {
 	cardWidth := max(20, width-4)
 	head := m.theme.Title.Render(title)
 	if len(buckets) == 0 {
-		return m.theme.Card.Copy().Width(cardWidth).Render(head + "\n" + m.theme.Subtle.Render("Waiting for data"))
+		return m.theme.Card.Width(cardWidth).Render(head + "\n" + m.theme.Subtle.Render("Waiting for data"))
 	}
 	lines := make([]string, 0, len(buckets)+1)
 	lines = append(lines, head)
@@ -128,7 +126,7 @@ func (m *Model) renderTopList(title string, buckets []state.StatBucket, width in
 		lines = append(lines, trimToWidth(bucket.Label, cardWidth-2))
 		lines = append(lines, fmt.Sprintf("%-*s %6d", barWidth+1, bar, bucket.Value))
 	}
-	return m.theme.Card.Copy().Width(cardWidth).Render(strings.Join(lines, "\n"))
+	return m.theme.Card.Width(cardWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) renderBreakdownLine(label string, value, total uint64, style lipgloss.Style, width int) string {
@@ -140,25 +138,25 @@ func (m *Model) renderBreakdownLine(label string, value, total uint64, style lip
 	return fmt.Sprintf("%-8s %s %3d%%", label, style.Render(bar), percent)
 }
 
-func (m *Model) renderRelativeBar(value, max uint64, width int) string {
+func (m *Model) renderRelativeBar(value, total uint64, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	filled := filledWidth(value, max, width)
+	filled := filledWidth(value, total, width)
 	return strings.Repeat("█", filled) + strings.Repeat(" ", width-filled)
 }
 
-func filledWidth(value, max uint64, width int) int {
+func filledWidth(value, total uint64, width int) int {
 	if width <= 0 {
 		return 0
 	}
-	if max == 0 {
+	if total == 0 {
 		if value > 0 {
 			return width
 		}
 		return 0
 	}
-	filled := int((value*uint64(width) + max/2) / max)
+	filled := int((value*uint64(width) + total/2) / total)
 	if value > 0 && filled == 0 {
 		filled = 1
 	}
@@ -186,28 +184,6 @@ func (m *Model) metaLine(stats state.Stats) string {
 	if stats.UpdatedAt.IsZero() {
 		return "Waiting for daemon telemetry"
 	}
-	node := fallback(stats.NodeName, fallback(stats.NodeID, "unknown node"))
-	return fmt.Sprintf("Node %s · Daemon %s · Updated %s", node, fallback(stats.DaemonVersion, "unknown"), relativeTime(stats.UpdatedAt))
-}
-
-func fallback(value, def string) string {
-	if value == "" {
-		return def
-	}
-	return value
-}
-
-func relativeTime(ts time.Time) string {
-	delta := time.Since(ts)
-	if delta < time.Second {
-		delta = time.Second
-	}
-	return fmt.Sprintf("%s ago", delta.Truncate(time.Second))
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	node := util.Fallback(stats.NodeName, util.Fallback(stats.NodeID, "unknown node"))
+	return fmt.Sprintf("Node %s · Daemon %s · Updated %s", node, util.Fallback(stats.DaemonVersion, "unknown"), util.RelativeTime(stats.UpdatedAt))
 }

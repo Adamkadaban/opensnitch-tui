@@ -56,6 +56,27 @@ func TestStoreUpdateNodeStatusCreatesNewEntry(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateNodeStatusNotifiesSubscribersOnNewNode(t *testing.T) {
+	store := NewStore()
+	sub := store.Subscribe()
+	t.Cleanup(sub.Close)
+
+	done := make(chan struct{})
+	go func() {
+		if _, ok := <-sub.Events(); ok {
+			close(done)
+		}
+	}()
+
+	store.UpdateNodeStatus("node-new", NodeStatusReady, "connected", time.Now())
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected notification after adding new node via UpdateNodeStatus")
+	}
+}
+
 func TestStoreSetStatsAndError(t *testing.T) {
 	store := NewStore()
 	stats := Stats{NodeID: "node-1", Rules: 10}
@@ -243,7 +264,7 @@ func TestStoreUpdateRule(t *testing.T) {
 	if !store.snapshot.Rules["node-1"][0].Enabled {
 		t.Fatal("expected rule to be enabled")
 	}
-	if store.UpdateRule("node-1", "missing", func(r *Rule) {}) {
+	if store.UpdateRule("node-1", "missing", func(_ *Rule) {}) {
 		t.Fatal("expected missing rule update to return false")
 	}
 }

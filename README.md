@@ -13,7 +13,7 @@ Terminal user interface for [OpenSnitch](https://github.com/evilsocket/opensnitc
 
 ## Quickstart
 
-1. Ensure Go 1.24+ is available and `go.work` points at the repo root (`go work sync` if modules change).
+1. Ensure Go 1.24+ is available. (If using a Go workspace, run `go work sync` as needed; otherwise modules work standalone.)
 2. Install `golangci-lint` (>= 1.56) for linting.
 3. Build, lint, and test frequently:
 

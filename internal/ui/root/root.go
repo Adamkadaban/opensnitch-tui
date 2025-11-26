@@ -30,10 +30,6 @@ type Options struct {
 	Settings controller.SettingsManager
 }
 
-type themedView interface {
-	SetTheme(theme.Theme)
-}
-
 // Model orchestrates routed Bubble Tea views and global UI chrome.
 type Model struct {
 	store     *state.Store
@@ -223,14 +219,10 @@ func (m *Model) applyTheme(th theme.Theme) {
 	m.theme = th
 	m.themeName = th.Name
 	for _, v := range m.views {
-		if tv, ok := v.(themedView); ok {
-			tv.SetTheme(th)
-		}
+		v.SetTheme(th)
 	}
 	if m.prompt != nil {
-		if tv, ok := any(m.prompt).(themedView); ok {
-			tv.SetTheme(th)
-		}
+		m.prompt.SetTheme(th)
 	}
 }
 
@@ -254,13 +246,6 @@ func indexOf(values []state.ViewKind, target state.ViewKind) int {
 		}
 	}
 	return 0
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func titleCase(value string) string {

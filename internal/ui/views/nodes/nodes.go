@@ -28,34 +28,32 @@ func New(store *state.Store, th theme.Theme) view.Model {
 
 func (m *Model) Init() tea.Cmd { return nil }
 
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m, nil
-}
+func (m *Model) Update(_ tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
 
 func (m *Model) View() string {
 	snapshot := m.store.Snapshot()
 
 	if len(snapshot.Nodes) == 0 {
 		msg := m.theme.Subtle.Render("No nodes configured. Add entries under nodes[] in config.yaml.")
-		return m.theme.Body.Copy().Width(m.width).Height(max(3, m.height)).Render(msg)
+		return m.theme.Body.Width(max(1, m.width)).Height(max(3, m.height)).Render(msg)
 	}
 
 	rows := make([]string, 0, len(snapshot.Nodes))
 	for idx, node := range snapshot.Nodes {
-		label := fmt.Sprintf("%02d · %s", idx+1, displayName(node))
+		label := fmt.Sprintf("%02d · %s", idx+1, labelForNode(node))
 		status := m.statusStyle(node.Status).Render(strings.ToUpper(string(node.Status)))
 		meta := nodeDetails(node)
 
 		row := lipgloss.JoinHorizontal(lipgloss.Top,
-			m.theme.Title.Copy().Width(max(20, m.width/3)).Render(label),
-			m.theme.Subtle.Copy().Width(max(14, m.width/6)).Render(status),
-			m.theme.Body.Copy().Width(max(20, m.width/3)).Render(meta),
+			m.theme.Title.Width(max(20, m.width/3)).Render(label),
+			m.theme.Subtle.Width(max(14, m.width/6)).Render(status),
+			m.theme.Body.Width(max(20, m.width/3)).Render(meta),
 		)
 		rows = append(rows, row)
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	return m.theme.Body.Copy().Width(m.width).Height(max(3, m.height)).Render(content)
+	return m.theme.Body.Width(max(1, m.width)).Height(max(3, m.height)).Render(content)
 }
 
 func (m *Model) Title() string { return "Nodes" }
@@ -82,13 +80,6 @@ func (m *Model) statusStyle(status state.NodeStatus) lipgloss.Style {
 	}
 }
 
-func displayName(node state.Node) string {
-	if node.Name != "" {
-		return fmt.Sprintf("%s (%s)", node.Name, node.Address)
-	}
-	return node.Address
-}
-
 func nodeDetails(node state.Node) string {
 	parts := []string{}
 	if node.Version != "" {
@@ -109,9 +100,12 @@ func nodeDetails(node state.Node) string {
 	return strings.Join(parts, " · ")
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
+func labelForNode(node state.Node) string {
+	if node.Name != "" {
+		if node.Address != "" {
+			return fmt.Sprintf("%s (%s)", node.Name, node.Address)
+		}
+		return node.Name
 	}
-	return b
+	return node.Address
 }

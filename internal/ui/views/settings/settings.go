@@ -13,6 +13,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
+	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
 // Model renders the settings view for global preferences.
@@ -236,42 +237,26 @@ func (m *Model) contentWidth() int {
 	return m.width - 4
 }
 
-func wrap(value, size int) int {
-	if size == 0 {
-		return 0
-	}
-	value %= size
-	if value < 0 {
-		value += size
-	}
-	return value
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
+// (wrap and max replaced by util.WrapIndex and Go built-in max)
 
 func (m *Model) shiftSelection(delta int) {
 	switch m.focus {
 	case fieldTheme:
-		m.themeIdx = wrap(m.themeIdx+delta, len(themeOptions))
+		m.themeIdx = util.WrapIndex(m.themeIdx, delta, len(themeOptions))
 	case fieldAction:
-		m.actionIdx = wrap(m.actionIdx+delta, len(promptActions))
+		m.actionIdx = util.WrapIndex(m.actionIdx, delta, len(promptActions))
 	case fieldDuration:
-		m.durationIdx = wrap(m.durationIdx+delta, len(promptDurations))
+		m.durationIdx = util.WrapIndex(m.durationIdx, delta, len(promptDurations))
 	case fieldTarget:
-		m.targetIdx = wrap(m.targetIdx+delta, len(promptTargets))
+		m.targetIdx = util.WrapIndex(m.targetIdx, delta, len(promptTargets))
 	case fieldPromptTimeout:
-		m.timeoutIdx = wrap(m.timeoutIdx+delta, len(promptTimeouts))
+		m.timeoutIdx = util.WrapIndex(m.timeoutIdx, delta, len(promptTimeouts))
 	case fieldAlertsInterrupt:
 		current := 0
 		if m.alertsInterrupt {
 			current = 1
 		}
-		current = wrap(current+delta, 2)
+		current = util.WrapIndex(current, delta, 2)
 		m.alertsInterrupt = current == 1
 	}
 }
