@@ -55,6 +55,14 @@ The bootstrapped UI renders configured nodes immediately; connection state will 
 - Use `go test ./...` (or `make test`) to ensure state reducers, views, and future daemon interactions remain healthy.
 - When editing vendor references (proto or Bubble Tea), regenerate code via dedicated scripts before committing to avoid drift.
 
+## Testing & Linting
+
+- **Linting:** `make lint` (golangci-lint) enforces formatting, vet, and static checks. Install golangci-lint ≥ 1.56 and keep it on PATH.
+- **Unit tests:** `go test ./...` or `make test` exercises store reducers, view logic, and controller adapters. Run after every change.
+- **Snapshot / TUI regression tests:** use `make snapshots` (wraps `go test ./internal/ui/... -run Snapshot`) to refresh vt100 recordings whenever UI output intentionally changes. Commit updated artifacts under `testdata/` alongside code.
+- **Pre-push sanity:** `make verify` chains lint + tests so CI matches local runs.
+- **Golden files:** when tests under `internal/ui/view/viewtest` fail, inspect diffs via `git diff` before updating expected output with `UPDATE_SNAPSHOTS=1 go test ./path/to/package`.
+
 ## Status
 
 The current milestone focuses on scaffolding: config loading, theming, Bubble Tea router, dashboard/nodes views, and build/test automation. Upcoming work will wire gRPC clients, live telemetry, modal prompts, firewall views, and full feature parity with the Qt UI.
