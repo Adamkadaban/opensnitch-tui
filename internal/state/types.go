@@ -138,12 +138,13 @@ type Prompt struct {
 
 // Snapshot is a threadsafe copy of the application's state tree.
 type Snapshot struct {
-	ActiveView ViewKind
-	Nodes      []Node
-	Stats      Stats
-	Alerts     []Alert
-	Rules      map[string][]Rule
-	Settings   Settings
-	Prompts    []Prompt
-	LastError  string
+	ActiveView  ViewKind
+	Nodes       []Node
+	Stats       Stats
+	Alerts      []Alert
+	Rules       map[string][]Rule
+	Settings    Settings
+	Prompts     []Prompt
+	LastError   string
+	LastErrorAt time.Time
 }

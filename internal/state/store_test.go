@@ -69,6 +69,9 @@ func TestStoreSetStatsAndError(t *testing.T) {
 	if snapshot.LastError != "boom" {
 		t.Fatalf("expected last error boom, got %q", snapshot.LastError)
 	}
+	if snapshot.LastErrorAt.IsZero() {
+		t.Fatal("expected last error timestamp to be set")
+	}
 }
 
 func TestStoreSnapshotCopy(t *testing.T) {
@@ -88,6 +91,18 @@ func TestStoreSnapshotCopy(t *testing.T) {
 	}
 }
 
+func TestStoreErrorAutoExpires(t *testing.T) {
+	store := NewStore()
+	originalTTL := errorDisplayTTL
+	errorDisplayTTL = 10 * time.Millisecond
+	t.Cleanup(func() { errorDisplayTTL = originalTTL })
+
+	store.SetError("timeout")
+	time.Sleep(25 * time.Millisecond)
+	if err := store.Snapshot().LastError; err != "" {
+		t.Fatalf("expected error to expire, still seeing %q", err)
+	}
+}
 func TestStoreSubscriptionReceivesNotifications(t *testing.T) {
 	store := NewStore()
 	sub := store.Subscribe()

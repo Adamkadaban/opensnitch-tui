@@ -17,6 +17,8 @@ type Store struct {
 
 const maxAlerts = 100
 
+var errorDisplayTTL = 10 * time.Second
+
 // Subscription delivers notifications when the store mutates.
 type Subscription struct {
 	id     int
@@ -149,9 +151,25 @@ func (s *Store) SetStats(stats Stats) {
 // SetError records a user-visible error message.
 func (s *Store) SetError(msg string) {
 	s.mu.Lock()
+	issuedAt := time.Now()
+	s.snapshot.LastError = msg
+	s.snapshot.LastErrorAt = issuedAt
+	s.notifyLocked()
+	s.mu.Unlock()
+
+	go s.expireError(issuedAt)
+}
+
+// ClearError removes the currently displayed error message, if any.
+func (s *Store) ClearError() {
+	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.snapshot.LastError = msg
+	if s.snapshot.LastError == "" {
+		return
+	}
+	s.snapshot.LastError = ""
+	s.snapshot.LastErrorAt = time.Time{}
 	s.notifyLocked()
 }
 
@@ -312,6 +330,25 @@ func (s *Store) removeSubscription(id int) {
 		delete(s.subs, id)
 		close(sub.events)
 	}
+}
+
+func (s *Store) expireError(issuedAt time.Time) {
+	timer := time.NewTimer(errorDisplayTTL)
+	defer timer.Stop()
+	<-timer.C
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.snapshot.LastError == "" {
+		return
+	}
+	if !s.snapshot.LastErrorAt.Equal(issuedAt) {
+		return
+	}
+	s.snapshot.LastError = ""
+	s.snapshot.LastErrorAt = time.Time{}
+	s.notifyLocked()
 }
 
 // Events returns a channel that receives a signal for each store mutation.
