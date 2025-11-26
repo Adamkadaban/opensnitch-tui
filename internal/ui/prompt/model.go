@@ -108,6 +108,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 				m.focus = fieldTarget
 			}
 			return nil, true
+		case "down", "j":
+			m.focus = (m.focus + 1) % 3
+			return nil, true
+		case "up", "k":
+			m.focus--
+			if m.focus < 0 {
+				m.focus = fieldTarget
+			}
+			return nil, true
 		case "left", "h":
 			m.stepSelection(-1, form, len(targets))
 			return nil, true
@@ -161,7 +170,7 @@ func (m *Model) View() string {
 	durationRow := m.renderChoices("Duration", mapDurationLabels(durationOptions), form.duration, m.focus == fieldDuration)
 	targetRow := m.renderChoices("Target", mapTargetLabels(targets), form.target, m.focus == fieldTarget)
 
-	controls := m.theme.Subtle.Render("tab move · ←/→ change · enter confirm · [/] cycle prompts")
+	controls := m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter confirm · [/] cycle prompts")
 	status := m.status
 	if status == "" && !prompt.ExpiresAt.IsZero() {
 		remaining := time.Until(prompt.ExpiresAt)

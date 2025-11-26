@@ -95,7 +95,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shiftSelection(-1)
 		case "right", "l":
 			m.shiftSelection(1)
-		case "enter", "s":
+		case "enter":
+			m.persistAll()
+		case "s":
 			m.persistFocused()
 		}
 	}
@@ -108,7 +110,7 @@ func (m *Model) View() string {
 		m.renderRow("Default action", promptActions, m.actionIdx, m.focus == fieldAction),
 		m.renderRow("Default duration", promptDurations, m.durationIdx, m.focus == fieldDuration),
 		m.renderRow("Default target", promptTargets, m.targetIdx, m.focus == fieldTarget),
-		m.theme.Subtle.Render("tab move · ←/→ change · enter save"),
+		m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter save all · s save focused"),
 	}
 	if m.status != "" {
 		body = append(body, m.status)
@@ -138,6 +140,26 @@ func (m *Model) persistFocused() {
 	case fieldTarget:
 		m.persistTarget()
 	}
+}
+
+func (m *Model) persistAll() {
+	if m.controller == nil {
+		m.status = m.theme.Danger.Render("Settings controller unavailable")
+		return
+	}
+	if _, err := m.saveAction(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save action: %v", err))
+		return
+	}
+	if _, err := m.saveDuration(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save duration: %v", err))
+		return
+	}
+	if _, err := m.saveTarget(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
+		return
+	}
+	m.status = m.theme.Success.Render("Prompt defaults saved")
 }
 
 func (m *Model) contentWidth() int {
@@ -177,45 +199,66 @@ func (m *Model) shiftSelection(delta int) {
 }
 
 func (m *Model) persistAction() {
+	if value, err := m.saveAction(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save action: %v", err))
+	} else {
+		m.status = m.theme.Success.Render(fmt.Sprintf("Default action set to %s", value))
+	}
+}
+
+func (m *Model) persistDuration() {
+	if value, err := m.saveDuration(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save duration: %v", err))
+	} else {
+		m.status = m.theme.Success.Render(fmt.Sprintf("Default duration set to %s", value))
+	}
+}
+
+func (m *Model) persistTarget() {
+	if value, err := m.saveTarget(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
+	} else {
+		m.status = m.theme.Success.Render(fmt.Sprintf("Default target set to %s", value))
+	}
+}
+
+func (m *Model) saveAction() (string, error) {
 	choice := promptActions[m.actionIdx].value
 	value, err := m.controller.SetDefaultPromptAction(choice)
 	if err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save action: %v", err))
-		return
+		return "", err
 	}
 	m.actionIdx = optionIndex(promptActions, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.DefaultPromptAction = value
 	})
-	m.status = m.theme.Success.Render(fmt.Sprintf("Default action set to %s", value))
+	return value, nil
 }
 
-func (m *Model) persistDuration() {
+func (m *Model) saveDuration() (string, error) {
 	choice := promptDurations[m.durationIdx].value
 	value, err := m.controller.SetDefaultPromptDuration(choice)
 	if err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save duration: %v", err))
-		return
+		return "", err
 	}
 	m.durationIdx = optionIndex(promptDurations, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.DefaultPromptDuration = value
 	})
-	m.status = m.theme.Success.Render(fmt.Sprintf("Default duration set to %s", value))
+	return value, nil
 }
 
-func (m *Model) persistTarget() {
+func (m *Model) saveTarget() (string, error) {
 	choice := promptTargets[m.targetIdx].value
 	value, err := m.controller.SetDefaultPromptTarget(choice)
 	if err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
-		return
+		return "", err
 	}
 	m.targetIdx = optionIndex(promptTargets, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.DefaultPromptTarget = value
 	})
-	m.status = m.theme.Success.Render(fmt.Sprintf("Default target set to %s", value))
+	return value, nil
 }
 
 func (m *Model) updateSettings(mut func(*state.Settings)) {
