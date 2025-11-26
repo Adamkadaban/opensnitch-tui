@@ -18,8 +18,9 @@ const (
 
 // Config captures persisted user preferences and known daemon nodes.
 type Config struct {
-	Theme string `yaml:"theme"`
-	Nodes []Node `yaml:"nodes"`
+	Theme               string `yaml:"theme"`
+	DefaultPromptAction string `yaml:"default_prompt_action"`
+	Nodes               []Node `yaml:"nodes"`
 }
 
 // Node contains metadata required to connect to an OpenSnitch daemon instance.
@@ -61,8 +62,9 @@ func Load(path string) (Config, error) {
 // Default returns a usable configuration when no file exists yet.
 func Default() Config {
 	return Config{
-		Theme: ThemeAuto,
-		Nodes: []Node{},
+		Theme:               ThemeAuto,
+		DefaultPromptAction: DefaultPromptAction,
+		Nodes:               []Node{},
 	}
 }
 
@@ -81,4 +83,40 @@ func resolvePath(path string) (string, error) {
 		return path, nil
 	}
 	return DefaultPath()
+}
+
+const DefaultPromptAction = "deny"
+
+// NormalizePromptAction ensures stored prompts actions stay within supported values.
+func NormalizePromptAction(action string) string {
+	switch action {
+	case "allow", "deny", "reject":
+		return action
+	default:
+		return DefaultPromptAction
+	}
+}
+
+// ResolvePath returns the concrete config file path.
+func ResolvePath(path string) (string, error) {
+	return resolvePath(path)
+}
+
+// Save writes configuration data to disk.
+func Save(path string, cfg Config) error {
+	resolved, err := resolvePath(path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return fmt.Errorf("ensure config dir: %w", err)
+	}
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := os.WriteFile(resolved, data, 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }

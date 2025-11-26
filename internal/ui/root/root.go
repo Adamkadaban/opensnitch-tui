@@ -12,19 +12,22 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/keymap"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/prompt"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/alerts"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/dashboard"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/nodes"
-	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/placeholder"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/rules"
+	settingsview "github.com/adamkadaban/opensnitch-tui/internal/ui/views/settings"
 )
 
 // Options controls how the root model is assembled.
 type Options struct {
-	Theme  theme.Theme
-	KeyMap *keymap.Global
-	Rules  controller.RuleManager
+	Theme    theme.Theme
+	KeyMap   *keymap.Global
+	Rules    controller.RuleManager
+	Prompts  controller.PromptManager
+	Settings controller.SettingsManager
 }
 
 // Model orchestrates routed Bubble Tea views and global UI chrome.
@@ -33,6 +36,7 @@ type Model struct {
 	sub    *state.Subscription
 	keymap keymap.Global
 	theme  theme.Theme
+	prompt *prompt.Model
 
 	views  map[state.ViewKind]view.Model
 	order  []state.ViewKind
@@ -54,13 +58,16 @@ func New(store *state.Store, opts Options) *Model {
 		state.ViewAlerts:    alerts.New(store, opts.Theme),
 		state.ViewRules:     rules.New(store, opts.Theme, opts.Rules),
 		state.ViewNodes:     nodes.New(store, opts.Theme),
-		state.ViewSettings:  placeholder.New("Settings", "Settings view coming soon.", opts.Theme),
+		state.ViewSettings:  settingsview.New(store, opts.Theme, opts.Settings),
 	}
+
+	promptModel := prompt.New(store, opts.Theme, opts.Prompts)
 
 	model := &Model{
 		store:  store,
 		keymap: keyMap,
 		theme:  opts.Theme,
+		prompt: promptModel,
 		views:  views,
 		order:  append([]state.ViewKind{}, state.DefaultViewOrder...),
 		active: state.ViewDashboard,
@@ -78,6 +85,9 @@ func (m *Model) Init() tea.Cmd {
 	for _, v := range m.views {
 		cmds = append(cmds, v.Init())
 	}
+	if m.prompt != nil {
+		cmds = append(cmds, m.prompt.Init())
+	}
 	cmds = append(cmds, waitForStoreChanges(m.sub))
 	return tea.Batch(cmds...)
 }
@@ -92,8 +102,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, v := range m.views {
 			v.SetSize(msg.Width, max(1, msg.Height-2))
 		}
+		if m.prompt != nil {
+			m.prompt.SetSize(msg.Width, max(1, msg.Height-2))
+		}
 
 	case tea.KeyMsg:
+		if m.prompt != nil {
+			if cmd, handled := m.prompt.Update(msg); handled {
+				return m, cmd
+			}
+		}
 		switch {
 		case key.Matches(msg, m.keymap.Quit):
 			return m, tea.Quit
@@ -128,6 +146,11 @@ func (m *Model) View() string {
 	)
 
 	body := activeView.View()
+	if m.prompt != nil {
+		if overlay := m.prompt.View(); overlay != "" {
+			body = overlay
+		}
+	}
 	snapshot := m.store.Snapshot()
 	footer := m.theme.Footer.Render(m.footerLine(snapshot))
 

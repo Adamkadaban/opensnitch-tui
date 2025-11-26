@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 
+	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 )
@@ -49,12 +51,40 @@ type Server struct {
 	sessions    map[string]*session
 	sessionsMu  sync.Mutex
 	notifySeqID uint64
+	prompts     map[string]*promptRequest
+	promptsMu   sync.Mutex
 }
 
 type session struct {
 	nodeID string
 	send   chan *pb.Notification
 }
+
+type promptRequest struct {
+	id       string
+	prompt   state.Prompt
+	response chan promptResponse
+}
+
+type promptResponse struct {
+	rule *pb.Rule
+	err  error
+}
+
+const (
+	promptTimeout  = 30 * time.Second
+	ruleTypeSimple = "simple"
+)
+
+const (
+	operandProcessPath = "process.path"
+	operandProcessCmd  = "process.command"
+	operandProcessID   = "process.id"
+	operandUserID      = "user.id"
+	operandDestIP      = "dest.ip"
+	operandDestHost    = "dest.host"
+	operandDestPort    = "dest.port"
+)
 
 // New creates a new daemon RPC server.
 func New(store *state.Store, opts Options) *Server {
@@ -70,7 +100,7 @@ func New(store *state.Store, opts Options) *Server {
 	if opts.ServerVersion == "" {
 		opts.ServerVersion = "dev"
 	}
-	return &Server{store: store, opts: opts, sessions: make(map[string]*session)}
+	return &Server{store: store, opts: opts, sessions: make(map[string]*session), prompts: make(map[string]*promptRequest)}
 }
 
 // Start begins listening for daemon connections until the context is cancelled.
@@ -186,17 +216,44 @@ func (s *Server) PostAlert(ctx context.Context, alert *pb.Alert) (*pb.MsgRespons
 	return &pb.MsgResponse{Id: alert.GetId()}, nil
 }
 
-// AskRule currently auto-allows the connection until interactive prompts are implemented.
 func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, error) {
-	name := fmt.Sprintf("auto-%d", time.Now().UnixNano())
-	s.store.SetError(fmt.Sprintf("auto-allow %s:%d (%s)", conn.GetDstHost(), conn.GetDstPort(), conn.GetProtocol()))
-	return &pb.Rule{
-		Created:  time.Now().Unix(),
-		Name:     name,
-		Enabled:  true,
-		Action:   "allow",
-		Duration: "once",
-	}, nil
+	nodeID := peerKey(ctx)
+	nodeName := s.nodeName(nodeID)
+	now := time.Now()
+	prompt := state.Prompt{
+		ID:          fmt.Sprintf("%s:%d", nodeID, now.UnixNano()),
+		NodeID:      nodeID,
+		NodeName:    nodeName,
+		Connection:  convertConnection(conn),
+		RequestedAt: now,
+		ExpiresAt:   now.Add(promptTimeout),
+	}
+	req := &promptRequest{
+		id:       prompt.ID,
+		prompt:   prompt,
+		response: make(chan promptResponse, 1),
+	}
+	s.registerPrompt(req)
+	defer s.unregisterPrompt(req.id)
+
+	s.store.AddPrompt(prompt)
+	timer := time.NewTimer(promptTimeout)
+	defer timer.Stop()
+
+	select {
+	case resp := <-req.response:
+		s.store.RemovePrompt(req.id)
+		return resp.rule, resp.err
+	case <-timer.C:
+		s.store.RemovePrompt(req.id)
+		s.store.SetError(fmt.Sprintf("prompt timed out for %s", displayConnectionLabel(prompt.Connection)))
+		decision := s.defaultPromptDecision(prompt)
+		rule, err := buildRuleFromDecision(prompt, decision)
+		return rule, err
+	case <-ctx.Done():
+		s.store.RemovePrompt(req.id)
+		return nil, ctx.Err()
+	}
 }
 
 func (s *Server) serverOptions() ([]grpc.ServerOption, error) {
@@ -389,6 +446,170 @@ func (s *Server) lookupRule(nodeID, ruleName string) (state.Rule, error) {
 		}
 	}
 	return state.Rule{}, fmt.Errorf("rule %s not found for %s", ruleName, nodeID)
+}
+
+// ResolvePrompt implements controller.PromptManager.
+func (s *Server) ResolvePrompt(decision controller.PromptDecision) error {
+	if decision.PromptID == "" {
+		return fmt.Errorf("prompt id required")
+	}
+	req := s.promptByID(decision.PromptID)
+	if req == nil {
+		return fmt.Errorf("prompt %s not found", decision.PromptID)
+	}
+	rule, err := buildRuleFromDecision(req.prompt, decision)
+	if err != nil {
+		return err
+	}
+	select {
+	case req.response <- promptResponse{rule: rule}:
+		s.store.RemovePrompt(decision.PromptID)
+		return nil
+	default:
+		return fmt.Errorf("prompt %s already resolved", decision.PromptID)
+	}
+}
+
+func (s *Server) registerPrompt(req *promptRequest) {
+	s.promptsMu.Lock()
+	s.prompts[req.id] = req
+	s.promptsMu.Unlock()
+}
+
+func (s *Server) unregisterPrompt(id string) {
+	s.promptsMu.Lock()
+	delete(s.prompts, id)
+	s.promptsMu.Unlock()
+}
+
+func (s *Server) promptByID(id string) *promptRequest {
+	s.promptsMu.Lock()
+	defer s.promptsMu.Unlock()
+	return s.prompts[id]
+}
+
+func (s *Server) defaultPromptDecision(prompt state.Prompt) controller.PromptDecision {
+	decision := controller.PromptDecision{
+		PromptID: prompt.ID,
+		Action:   controller.PromptActionDeny,
+		Duration: controller.PromptDurationOnce,
+		Target:   controller.PromptTargetProcessPath,
+	}
+	settings := s.store.Snapshot().Settings
+	if settings.DefaultPromptAction != "" {
+		decision.Action = controller.PromptAction(settings.DefaultPromptAction)
+	}
+	conn := prompt.Connection
+	switch {
+	case conn.ProcessPath != "":
+		decision.Target = controller.PromptTargetProcessPath
+	case len(conn.ProcessArgs) > 0:
+		decision.Target = controller.PromptTargetProcessCmd
+	case conn.DstHost != "":
+		decision.Target = controller.PromptTargetDestinationHost
+	case conn.DstIP != "":
+		decision.Target = controller.PromptTargetDestinationIP
+	case conn.DstPort != 0:
+		decision.Target = controller.PromptTargetDestinationPort
+	default:
+		decision.Target = controller.PromptTargetProcessID
+	}
+	decision.Action = normalizePromptAction(decision.Action)
+	return decision
+}
+
+func buildRuleFromDecision(prompt state.Prompt, decision controller.PromptDecision) (*pb.Rule, error) {
+	decision.Action = normalizePromptAction(decision.Action)
+	if decision.Duration == "" {
+		decision.Duration = controller.PromptDurationOnce
+	}
+	if decision.Target == "" {
+		decision.Target = controller.PromptTargetProcessPath
+	}
+	operator, err := operatorForTarget(prompt.Connection, decision.Target)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.Rule{
+		Created:  time.Now().Unix(),
+		Name:     fmt.Sprintf("user-%d", time.Now().UnixNano()),
+		Enabled:  true,
+		Action:   string(decision.Action),
+		Duration: string(decision.Duration),
+		Operator: operator,
+	}, nil
+}
+
+func operatorForTarget(conn state.Connection, target controller.PromptTarget) (*pb.Operator, error) {
+	switch target {
+	case controller.PromptTargetProcessPath:
+		if conn.ProcessPath == "" {
+			return nil, fmt.Errorf("process path unavailable")
+		}
+		return simpleOperator(operandProcessPath, conn.ProcessPath), nil
+	case controller.PromptTargetProcessCmd:
+		cmdLine := strings.TrimSpace(strings.Join(conn.ProcessArgs, " "))
+		if cmdLine == "" {
+			if conn.ProcessPath == "" {
+				return nil, fmt.Errorf("command line unavailable")
+			}
+			return simpleOperator(operandProcessPath, conn.ProcessPath), nil
+		}
+		return simpleOperator(operandProcessCmd, cmdLine), nil
+	case controller.PromptTargetProcessID:
+		return simpleOperator(operandProcessID, fmt.Sprintf("%d", conn.ProcessID)), nil
+	case controller.PromptTargetUserID:
+		return simpleOperator(operandUserID, fmt.Sprintf("%d", conn.UserID)), nil
+	case controller.PromptTargetDestinationIP:
+		if conn.DstIP == "" {
+			return nil, fmt.Errorf("destination ip unavailable")
+		}
+		return simpleOperator(operandDestIP, conn.DstIP), nil
+	case controller.PromptTargetDestinationHost:
+		if conn.DstHost == "" {
+			return nil, fmt.Errorf("destination host unavailable")
+		}
+		return simpleOperator(operandDestHost, conn.DstHost), nil
+	case controller.PromptTargetDestinationPort:
+		if conn.DstPort == 0 {
+			return nil, fmt.Errorf("destination port unavailable")
+		}
+		return simpleOperator(operandDestPort, fmt.Sprintf("%d", conn.DstPort)), nil
+	default:
+		return nil, fmt.Errorf("unsupported target %s", target)
+	}
+}
+
+func simpleOperator(operand, data string) *pb.Operator {
+	return &pb.Operator{
+		Type:    ruleTypeSimple,
+		Operand: operand,
+		Data:    data,
+	}
+}
+
+func displayConnectionLabel(conn state.Connection) string {
+	dest := conn.DstHost
+	if dest == "" {
+		dest = conn.DstIP
+	}
+	return fmt.Sprintf("%s -> %s:%d", fallbackString(conn.ProcessPath, "unknown"), fallbackString(dest, "destination"), conn.DstPort)
+}
+
+func fallbackString(value, def string) string {
+	if value == "" {
+		return def
+	}
+	return value
+}
+
+func normalizePromptAction(action controller.PromptAction) controller.PromptAction {
+	switch action {
+	case controller.PromptActionAllow, controller.PromptActionDeny, controller.PromptActionReject:
+		return action
+	default:
+		return controller.PromptActionDeny
+	}
 }
 
 func peerKey(ctx context.Context) string {

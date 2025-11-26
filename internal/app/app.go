@@ -11,6 +11,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/config"
 	"github.com/adamkadaban/opensnitch-tui/internal/daemon"
 	"github.com/adamkadaban/opensnitch-tui/internal/keymap"
+	"github.com/adamkadaban/opensnitch-tui/internal/settings"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	root "github.com/adamkadaban/opensnitch-tui/internal/ui/root"
@@ -25,14 +26,20 @@ type Options struct {
 
 // Run loads configuration, prepares state, and starts the Bubble Tea program.
 func Run(ctx context.Context, opts Options) error {
-	cfg, err := config.Load(opts.ConfigPath)
+	configPath, err := config.ResolvePath(opts.ConfigPath)
+	if err != nil {
+		return fmt.Errorf("resolve config: %w", err)
+	}
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	cfg.DefaultPromptAction = config.NormalizePromptAction(cfg.DefaultPromptAction)
 
 	palette := theme.New(theme.Options{Override: opts.Theme, Preferred: cfg.Theme})
 	store := state.NewStore()
 	store.SetNodes(configNodesToState(cfg.Nodes))
+	store.SetSettings(state.Settings{DefaultPromptAction: config.NormalizePromptAction(cfg.DefaultPromptAction)})
 
 	km := keymap.DefaultGlobal()
 	daemonSrv := daemon.New(store, daemon.Options{
@@ -41,10 +48,14 @@ func Run(ctx context.Context, opts Options) error {
 		ServerVersion: "dev",
 	})
 
+	settingsMgr := settings.NewManager(configPath, cfg)
+
 	rootModel := root.New(store, root.Options{
-		Theme:  palette,
-		KeyMap: &km,
-		Rules:  daemonSrv,
+		Theme:    palette,
+		KeyMap:   &km,
+		Rules:    daemonSrv,
+		Prompts:  daemonSrv,
+		Settings: settingsMgr,
 	})
 
 	prog := tea.NewProgram(rootModel, tea.WithAltScreen())

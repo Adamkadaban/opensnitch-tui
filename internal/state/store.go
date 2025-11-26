@@ -29,6 +29,8 @@ func NewStore() *Store {
 			ActiveView: ViewDashboard,
 			Nodes:      []Node{},
 			Rules:      make(map[string][]Rule),
+			Settings:   Settings{DefaultPromptAction: "deny"},
+			Prompts:    []Prompt{},
 		},
 		subs: make(map[int]*Subscription),
 	}
@@ -43,6 +45,8 @@ func (s *Store) Snapshot() Snapshot {
 	copySnap.Nodes = cloneNodes(s.snapshot.Nodes)
 	copySnap.Alerts = cloneAlerts(s.snapshot.Alerts)
 	copySnap.Rules = cloneRulesMap(s.snapshot.Rules)
+	copySnap.Settings = s.snapshot.Settings
+	copySnap.Prompts = clonePrompts(s.snapshot.Prompts)
 	return copySnap
 }
 
@@ -186,6 +190,60 @@ func (s *Store) RemoveRule(nodeID, ruleName string) bool {
 	return false
 }
 
+// AddPrompt enqueues a pending connection prompt.
+func (s *Store) AddPrompt(prompt Prompt) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.snapshot.Prompts = append(s.snapshot.Prompts, clonePrompt(prompt))
+	s.notifyLocked()
+}
+
+// UpdatePrompt mutates a prompt by ID.
+func (s *Store) UpdatePrompt(id string, fn func(*Prompt)) bool {
+	if fn == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for idx, prompt := range s.snapshot.Prompts {
+		if prompt.ID != id {
+			continue
+		}
+		fn(&prompt)
+		s.snapshot.Prompts[idx] = prompt
+		s.notifyLocked()
+		return true
+	}
+	return false
+}
+
+// RemovePrompt drops a prompt by ID.
+func (s *Store) RemovePrompt(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for idx, prompt := range s.snapshot.Prompts {
+		if prompt.ID != id {
+			continue
+		}
+		s.snapshot.Prompts = append(s.snapshot.Prompts[:idx], s.snapshot.Prompts[idx+1:]...)
+		s.notifyLocked()
+		return true
+	}
+	return false
+}
+
+// SetSettings replaces the persisted settings snapshot.
+func (s *Store) SetSettings(settings Settings) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.snapshot.Settings = settings
+	s.notifyLocked()
+}
+
 // AddAlert prepends an alert to the rolling history.
 func (s *Store) AddAlert(alert Alert) {
 	s.mu.Lock()
@@ -278,6 +336,17 @@ func cloneRulesMap(rules map[string][]Rule) map[string][]Rule {
 	return copyMap
 }
 
+func clonePrompts(prompts []Prompt) []Prompt {
+	if len(prompts) == 0 {
+		return nil
+	}
+	copyPrompts := make([]Prompt, len(prompts))
+	for i, prompt := range prompts {
+		copyPrompts[i] = clonePrompt(prompt)
+	}
+	return copyPrompts
+}
+
 func cloneRuleSlice(list []Rule) []Rule {
 	if len(list) == 0 {
 		return nil
@@ -305,6 +374,27 @@ func cloneRuleOperator(op RuleOperator) RuleOperator {
 	}
 	op.Children = children
 	return op
+}
+
+func clonePrompt(prompt Prompt) Prompt {
+	prompt.Connection = cloneConnection(prompt.Connection)
+	return prompt
+}
+
+func cloneConnection(conn Connection) Connection {
+	if len(conn.ProcessArgs) > 0 {
+		args := make([]string, len(conn.ProcessArgs))
+		copy(args, conn.ProcessArgs)
+		conn.ProcessArgs = args
+	}
+	if len(conn.ProcessChecksums) > 0 {
+		checksums := make(map[string]string, len(conn.ProcessChecksums))
+		for key, value := range conn.ProcessChecksums {
+			checksums[key] = value
+		}
+		conn.ProcessChecksums = checksums
+	}
+	return conn
 }
 
 func (s *Store) upsertNodeLocked(node Node) {

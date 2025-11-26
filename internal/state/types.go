@@ -93,6 +93,37 @@ type RuleOperator struct {
 	Children  []RuleOperator
 }
 
+// Settings captures user preferences affecting UI behavior.
+type Settings struct {
+	DefaultPromptAction string
+}
+
+// Connection stores the details of an outbound connection awaiting operator input.
+type Connection struct {
+	Protocol         string
+	SrcIP            string
+	SrcPort          uint32
+	DstIP            string
+	DstHost          string
+	DstPort          uint32
+	UserID           uint32
+	ProcessID        uint32
+	ProcessPath      string
+	ProcessCWD       string
+	ProcessArgs      []string
+	ProcessChecksums map[string]string
+}
+
+// Prompt captures a pending AskRule request from a daemon node.
+type Prompt struct {
+	ID          string
+	NodeID      string
+	NodeName    string
+	Connection  Connection
+	RequestedAt time.Time
+	ExpiresAt   time.Time
+}
+
 // Snapshot is a threadsafe copy of the application's state tree.
 type Snapshot struct {
 	ActiveView ViewKind
@@ -100,5 +131,7 @@ type Snapshot struct {
 	Stats      Stats
 	Alerts     []Alert
 	Rules      map[string][]Rule
+	Settings   Settings
+	Prompts    []Prompt
 	LastError  string
 }
