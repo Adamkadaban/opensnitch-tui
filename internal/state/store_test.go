@@ -138,6 +138,7 @@ func TestStoreAddAlert(t *testing.T) {
 
 func TestStoreSetRulesCopiesData(t *testing.T) {
 	store := NewStore()
+	store.SetStats(Stats{NodeID: "node-1"})
 	rules := []Rule{{
 		NodeID:      "node-1",
 		Name:        "ssh",
@@ -171,6 +172,20 @@ func TestStoreSetRulesCopiesData(t *testing.T) {
 	if store.snapshot.Rules["node-1"][0].Operator.Children[0].Children[0].Data != "/usr/bin/ssh" {
 		t.Fatalf("expected operator data to remain unchanged")
 	}
+
+	if store.snapshot.Stats.Rules != 1 {
+		t.Fatalf("expected stats to reflect rule count, got %d", store.snapshot.Stats.Rules)
+	}
+}
+
+func TestStoreAddRuleUpdatesStats(t *testing.T) {
+	store := NewStore()
+	store.SetStats(Stats{NodeID: "node-1"})
+	store.AddRule("node-1", Rule{Name: "http"})
+
+	if got := store.snapshot.Stats.Rules; got != 1 {
+		t.Fatalf("expected stats count 1, got %d", got)
+	}
 }
 
 func TestStoreUpdateRule(t *testing.T) {
@@ -193,6 +208,7 @@ func TestStoreUpdateRule(t *testing.T) {
 
 func TestStoreRemoveRule(t *testing.T) {
 	store := NewStore()
+	store.SetStats(Stats{NodeID: "node-1"})
 	store.SetRules("node-1", []Rule{{Name: "ssh"}, {Name: "http"}})
 
 	if !store.RemoveRule("node-1", "ssh") {
@@ -209,6 +225,9 @@ func TestStoreRemoveRule(t *testing.T) {
 	}
 	if _, ok := store.snapshot.Rules["node-1"]; ok {
 		t.Fatal("expected node entry to be removed when no rules remain")
+	}
+	if store.snapshot.Stats.Rules != 0 {
+		t.Fatalf("expected stats to drop to 0, got %d", store.snapshot.Stats.Rules)
 	}
 }
 

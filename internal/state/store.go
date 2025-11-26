@@ -163,6 +163,21 @@ func (s *Store) SetRules(nodeID string, rules []Rule) {
 		s.snapshot.Rules = make(map[string][]Rule)
 	}
 	s.snapshot.Rules[nodeID] = cloneRuleSlice(rules)
+	s.syncRuleCountLocked(nodeID)
+	s.notifyLocked()
+}
+
+// AddRule appends a rule entry for the specified node.
+func (s *Store) AddRule(nodeID string, rule Rule) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.snapshot.Rules == nil {
+		s.snapshot.Rules = make(map[string][]Rule)
+	}
+	rule.NodeID = nodeID
+	s.snapshot.Rules[nodeID] = append(s.snapshot.Rules[nodeID], cloneRule(rule))
+	s.syncRuleCountLocked(nodeID)
 	s.notifyLocked()
 }
 
@@ -191,6 +206,7 @@ func (s *Store) RemoveRule(nodeID, ruleName string) bool {
 		} else {
 			s.snapshot.Rules[nodeID] = list
 		}
+		s.syncRuleCountLocked(nodeID)
 		s.notifyLocked()
 		return true
 	}
@@ -466,8 +482,19 @@ func (s *Store) updateRuleLocked(nodeID, ruleName string, fn func(*Rule)) bool {
 		fn(&rule)
 		list[idx] = rule
 		s.snapshot.Rules[nodeID] = list
+		s.syncRuleCountLocked(nodeID)
 		s.notifyLocked()
 		return true
 	}
 	return false
+}
+
+func (s *Store) syncRuleCountLocked(nodeID string) {
+	if nodeID == "" {
+		return
+	}
+	if s.snapshot.Stats.NodeID != nodeID {
+		return
+	}
+	s.snapshot.Stats.Rules = uint64(len(s.snapshot.Rules[nodeID]))
 }

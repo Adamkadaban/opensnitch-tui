@@ -461,6 +461,8 @@ func (s *Server) ResolvePrompt(decision controller.PromptDecision) error {
 	if err != nil {
 		return err
 	}
+	stateRule := convertRule(rule, req.prompt.NodeID)
+	s.store.AddRule(req.prompt.NodeID, stateRule)
 	select {
 	case req.response <- promptResponse{rule: rule}:
 		s.store.RemovePrompt(decision.PromptID)

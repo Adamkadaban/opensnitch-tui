@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"google.golang.org/grpc/peer"
@@ -130,6 +131,40 @@ func TestServerDeleteRuleRemovesState(t *testing.T) {
 	}
 	if _, ok := store.Snapshot().Rules["node-1"]; ok {
 		t.Fatalf("expected rules to be removed from store")
+	}
+}
+
+func TestServerResolvePromptAddsRule(t *testing.T) {
+	store := state.NewStore()
+	store.SetStats(state.Stats{NodeID: "node-1"})
+	srv := New(store, Options{})
+	req := &promptRequest{
+		id: "prompt-1",
+		prompt: state.Prompt{
+			ID:     "prompt-1",
+			NodeID: "node-1",
+			Connection: state.Connection{
+				ProcessPath: "/usr/bin/curl",
+			},
+		},
+		response: make(chan promptResponse, 1),
+	}
+	srv.registerPrompt(req)
+	decision := controller.PromptDecision{
+		PromptID: "prompt-1",
+		Action:   controller.PromptActionAllow,
+		Duration: controller.PromptDurationAlways,
+		Target:   controller.PromptTargetProcessPath,
+	}
+	if err := srv.ResolvePrompt(decision); err != nil {
+		t.Fatalf("ResolvePrompt error: %v", err)
+	}
+	rules := store.Snapshot().Rules["node-1"]
+	if len(rules) != 1 {
+		t.Fatalf("expected rule to be added to store, got %d", len(rules))
+	}
+	if store.Snapshot().Stats.Rules != 1 {
+		t.Fatalf("expected stats count to update, got %d", store.Snapshot().Stats.Rules)
 	}
 }
 
