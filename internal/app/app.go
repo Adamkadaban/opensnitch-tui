@@ -42,9 +42,9 @@ func Run(ctx context.Context, opts Options) error {
 	})
 
 	rootModel := root.New(store, root.Options{
-		Theme:    palette,
-		KeyMap:   &km,
-		Rules:    daemonSrv,
+		Theme:  palette,
+		KeyMap: &km,
+		Rules:  daemonSrv,
 	})
 
 	prog := tea.NewProgram(rootModel, tea.WithAltScreen())

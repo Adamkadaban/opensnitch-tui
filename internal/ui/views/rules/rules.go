@@ -224,7 +224,7 @@ func (m *Model) renderRuleDetail(rules []state.Rule) string {
 		line := fmt.Sprintf("%s: %s", label, value)
 		return truncateString(line, inner)
 	}
-	desc := fallback(rule.Description, "No description provided.")
+	desc := fallback(rule.Description, "NONE")
 	created := "unknown"
 	if !rule.CreatedAt.IsZero() {
 		created = rule.CreatedAt.UTC().Format(time.RFC3339)
@@ -233,11 +233,11 @@ func (m *Model) renderRuleDetail(rules []state.Rule) string {
 		fmtLine("Name", fallback(rule.Name, "-")),
 		fmtLine("Node", fallback(rule.NodeID, "-")),
 		fmtLine("Description", desc),
-		fmtLine("Action", fallback(rule.Action, "-")),
-		fmtLine("Duration", fallback(rule.Duration, "-")),
-		fmtLine("Enabled", fmt.Sprintf("%t", rule.Enabled)),
-		fmtLine("Precedence", fmt.Sprintf("%t", rule.Precedence)),
-		fmtLine("NoLog", fmt.Sprintf("%t", rule.NoLog)),
+		fmtLine("Action", colorRuleAction(m.theme, rule.Action)),
+		fmtLine("Duration", colorDuration(m.theme, rule.Duration)),
+		fmtLine("Enabled", colorBool(m.theme, rule.Enabled)),
+		fmtLine("Precedence", colorBool(m.theme, rule.Precedence)),
+		fmtLine("NoLog", colorBool(m.theme, rule.NoLog)),
 		fmtLine("Created", created),
 		fmtLine("Operator", describeOperator(rule.Operator)),
 	}
@@ -535,6 +535,45 @@ func boolLabel(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func colorRuleAction(th theme.Theme, action string) string {
+	if action == "" {
+		return "-"
+	}
+	switch strings.ToLower(action) {
+	case "allow":
+		return th.Success.Render("allow")
+	case "deny", "drop", "block":
+		return th.Danger.Render(strings.ToLower(action))
+	case "ask":
+		return th.Warning.Render("ask")
+	default:
+		return th.Body.Render(strings.ToLower(action))
+	}
+}
+
+func colorBool(th theme.Theme, v bool) string {
+	if v {
+		return th.Success.Render("true")
+	}
+	return th.Warning.Render("false")
+}
+
+func colorDuration(th theme.Theme, duration string) string {
+	if duration == "" {
+		return "-"
+	}
+	switch strings.ToLower(duration) {
+	case "always", "forever", "permanent":
+		return th.Success.Render(duration)
+	case "once", "ask":
+		return th.Warning.Render(duration)
+	case "until restart", "session", "temporary":
+		return th.Subtle.Render(duration)
+	default:
+		return th.Body.Render(duration)
+	}
 }
 
 func max(a, b int) int {

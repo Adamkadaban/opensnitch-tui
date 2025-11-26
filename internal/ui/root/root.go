@@ -22,9 +22,9 @@ import (
 
 // Options controls how the root model is assembled.
 type Options struct {
-	Theme    theme.Theme
-	KeyMap   *keymap.Global
-	Rules    controller.RuleManager
+	Theme  theme.Theme
+	KeyMap *keymap.Global
+	Rules  controller.RuleManager
 }
 
 // Model orchestrates routed Bubble Tea views and global UI chrome.
