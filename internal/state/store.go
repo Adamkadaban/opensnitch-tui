@@ -238,6 +238,16 @@ func (s *Store) AddPrompt(prompt Prompt) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if prompt.RequestedAt.IsZero() {
+		prompt.RequestedAt = time.Now()
+	}
+	if prompt.ExpiresAt.IsZero() {
+		timeout := s.snapshot.Settings.PromptTimeout
+		if timeout <= 0 {
+			timeout = time.Duration(config.DefaultPromptTimeoutSeconds) * time.Second
+		}
+		prompt.ExpiresAt = prompt.RequestedAt.Add(timeout)
+	}
 	s.snapshot.Prompts = append(s.snapshot.Prompts, clonePrompt(prompt))
 	s.notifyLocked()
 }

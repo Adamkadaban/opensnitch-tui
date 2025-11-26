@@ -203,6 +203,33 @@ func TestStoreAddRuleUpdatesStats(t *testing.T) {
 	}
 }
 
+func TestStoreAddPromptBackfillsExpiry(t *testing.T) {
+	store := NewStore()
+	now := time.Now()
+	store.AddPrompt(Prompt{ID: "p1", RequestedAt: now})
+	snap := store.Snapshot()
+	if len(snap.Prompts) != 1 {
+		t.Fatalf("expected one prompt stored, got %d", len(snap.Prompts))
+	}
+	if snap.Prompts[0].ExpiresAt.IsZero() {
+		t.Fatalf("expected prompt expiry to be populated")
+	}
+
+	settings := snap.Settings
+	settings.PromptTimeout = 45 * time.Second
+	store.SetSettings(settings)
+	store.AddPrompt(Prompt{ID: "p2", RequestedAt: now})
+	snap = store.Snapshot()
+	if len(snap.Prompts) != 2 {
+		t.Fatalf("expected two prompts stored, got %d", len(snap.Prompts))
+	}
+	second := snap.Prompts[1]
+	delta := second.ExpiresAt.Sub(second.RequestedAt)
+	if delta != 45*time.Second {
+		t.Fatalf("expected expiry delta 45s, got %s", delta)
+	}
+}
+
 func TestStoreUpdateRule(t *testing.T) {
 	store := NewStore()
 	store.SetRules("node-1", []Rule{{Name: "ssh", Enabled: false}})

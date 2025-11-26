@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/adamkadaban/opensnitch-tui/internal/config"
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
@@ -26,6 +27,7 @@ type Model struct {
 	promptIdx int
 	forms     map[string]*formState
 	status    string
+	activeID  string
 }
 
 type field int
@@ -68,6 +70,8 @@ var durationOptions = []durationOption{
 	{label: "Until restart", value: controller.PromptDurationUntilRestart},
 	{label: "Always", value: controller.PromptDurationAlways},
 }
+
+var fallbackPromptTimeout = time.Duration(config.DefaultPromptTimeoutSeconds) * time.Second
 
 func New(store *state.Store, th theme.Theme, ctrl controller.PromptManager) *Model {
 	return &Model{
@@ -187,9 +191,17 @@ func (m *Model) View() string {
 	targetRow := m.renderChoices("Target", mapTargetLabels(targets), form.target, m.focus == fieldTarget)
 
 	controls := m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter confirm · [/] cycle prompts")
+	expiresAt := prompt.ExpiresAt
+	if expiresAt.IsZero() && !prompt.RequestedAt.IsZero() {
+		timeout := snapshot.Settings.PromptTimeout
+		if timeout <= 0 {
+			timeout = fallbackPromptTimeout
+		}
+		expiresAt = prompt.RequestedAt.Add(timeout)
+	}
 	status := m.status
-	if status == "" && !prompt.ExpiresAt.IsZero() {
-		remaining := time.Until(prompt.ExpiresAt)
+	if status == "" && !expiresAt.IsZero() {
+		remaining := time.Until(expiresAt)
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -226,6 +238,10 @@ func (m *Model) promptStateFromSnapshot(snapshot state.Snapshot) (state.Prompt, 
 		m.promptIdx = 0
 	}
 	prompt := snapshot.Prompts[m.promptIdx]
+	if prompt.ID != m.activeID {
+		m.activeID = prompt.ID
+		m.status = ""
+	}
 	targets := targetOptionsFor(prompt.Connection)
 	form := m.ensureForm(prompt.ID, targets)
 	return prompt, targets, form, true
