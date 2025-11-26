@@ -1,6 +1,13 @@
 package daemon
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
+	"github.com/adamkadaban/opensnitch-tui/internal/state"
+	"google.golang.org/grpc/peer"
+)
 
 func TestParseListenAddr(t *testing.T) {
 	tests := []struct {
@@ -31,3 +38,131 @@ func TestParseListenAddr(t *testing.T) {
 		}
 	}
 }
+
+func TestServerPostAlertStoresAlert(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &testAddr{network: "tcp", value: "1.2.3.4:1000"}})
+
+	alert := &pb.Alert{Id: 7, Priority: pb.Alert_MEDIUM, Type: pb.Alert_WARNING, Action: pb.Alert_SHOW_ALERT, Data: &pb.Alert_Text{Text: "disk"}}
+	resp, err := srv.PostAlert(ctx, alert)
+	if err != nil {
+		t.Fatalf("PostAlert returned error: %v", err)
+	}
+	if resp.GetId() != 7 {
+		t.Fatalf("expected response id 7, got %d", resp.GetId())
+	}
+
+	snap := store.Snapshot()
+	if len(snap.Alerts) != 1 {
+		t.Fatalf("expected 1 alert stored, got %d", len(snap.Alerts))
+	}
+	stored := snap.Alerts[0]
+	if stored.Text != "disk" {
+		t.Fatalf("expected alert text disk, got %q", stored.Text)
+	}
+	if stored.NodeID == "" {
+		t.Fatalf("expected node id to be populated")
+	}
+}
+
+func TestServerEnableFirewallRequiresSession(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	if err := srv.EnableFirewall("node-1"); err == nil {
+		t.Fatalf("expected error when node not connected")
+	}
+}
+
+func TestServerEnableFirewallEnqueuesNotification(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	sess := &session{nodeID: "node-1", send: make(chan *pb.Notification, 1)}
+	srv.sessions["node-1"] = sess
+	if err := srv.EnableFirewall("node-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	select {
+	case notif := <-sess.send:
+		if notif.Type != pb.Action_ENABLE_FIREWALL {
+			t.Fatalf("expected enable firewall action, got %v", notif.Type)
+		}
+	default:
+		t.Fatal("expected notification to be queued")
+	}
+}
+
+func TestServerSubscribeStoresRules(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &testAddr{network: "tcp", value: "1.2.3.4:5000"}})
+	cfg := &pb.ClientConfig{
+		Name:              "daemon",
+		Version:           "1",
+		IsFirewallRunning: true,
+		Rules: []*pb.Rule{{
+			Name: "ssh",
+			Operator: &pb.Operator{
+				Type:    "process",
+				Operand: "eq",
+				Data:    "/usr/bin/ssh",
+			},
+		}},
+	}
+	if _, err := srv.Subscribe(ctx, cfg); err != nil {
+		t.Fatalf("Subscribe error: %v", err)
+	}
+	snap := store.Snapshot()
+	if len(snap.Rules["tcp://1.2.3.4:5000"]) != 1 {
+		t.Fatalf("expected rules stored for node, got %+v", snap.Rules)
+	}
+}
+
+func TestServerEnableRuleSendsNotification(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	sess := &session{nodeID: "node-1", send: make(chan *pb.Notification, 1)}
+	srv.sessions["node-1"] = sess
+	store.SetRules("node-1", []state.Rule{{
+		Name:     "ssh",
+		Operator: state.RuleOperator{Type: "process", Operand: "eq", Data: "/usr/bin/ssh"},
+	}})
+	if err := srv.EnableRule("node-1", "ssh"); err != nil {
+		t.Fatalf("EnableRule error: %v", err)
+	}
+	notif := <-sess.send
+	if notif.Type != pb.Action_ENABLE_RULE {
+		t.Fatalf("expected enable rule action, got %v", notif.Type)
+	}
+	if len(notif.Rules) != 1 || notif.Rules[0].GetName() != "ssh" {
+		t.Fatalf("unexpected rule payload: %+v", notif.Rules)
+	}
+	if !store.Snapshot().Rules["node-1"][0].Enabled {
+		t.Fatalf("expected rule to be marked enabled in store")
+	}
+}
+
+func TestServerDeleteRuleRemovesState(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	sess := &session{nodeID: "node-1", send: make(chan *pb.Notification, 1)}
+	srv.sessions["node-1"] = sess
+	store.SetRules("node-1", []state.Rule{{
+		Name:     "ssh",
+		Operator: state.RuleOperator{Type: "process"},
+	}})
+	if err := srv.DeleteRule("node-1", "ssh"); err != nil {
+		t.Fatalf("DeleteRule error: %v", err)
+	}
+	if _, ok := store.Snapshot().Rules["node-1"]; ok {
+		t.Fatalf("expected rules to be removed from store")
+	}
+}
+
+type testAddr struct {
+	network string
+	value   string
+}
+
+func (a *testAddr) Network() string { return a.network }
+func (a *testAddr) String() string  { return a.value }

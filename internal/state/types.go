@@ -7,6 +7,7 @@ type ViewKind string
 
 const (
 	ViewDashboard ViewKind = "dashboard"
+	ViewAlerts    ViewKind = "alerts"
 	ViewRules     ViewKind = "rules"
 	ViewFirewall  ViewKind = "firewall"
 	ViewNodes     ViewKind = "nodes"
@@ -16,6 +17,7 @@ const (
 // DefaultViewOrder drives the tab navigation order across the application.
 var DefaultViewOrder = []ViewKind{
 	ViewDashboard,
+	ViewAlerts,
 	ViewRules,
 	ViewFirewall,
 	ViewNodes,
@@ -60,10 +62,73 @@ type Stats struct {
 	UpdatedAt     time.Time
 }
 
+// Alert represents a daemon alert entry shown in the UI.
+type Alert struct {
+	ID        string
+	NodeID    string
+	Text      string
+	Priority  string
+	Type      string
+	Action    string
+	CreatedAt time.Time
+}
+
+// Firewall represents nftables information for a node.
+type Firewall struct {
+	Enabled bool
+	Version uint32
+	Chains  []FirewallChain
+}
+
+// FirewallChain contains rules for a specific nftables chain.
+type FirewallChain struct {
+	Table    string
+	Name     string
+	Family   string
+	Hook     string
+	Priority string
+	Policy   string
+	Rules    []FirewallRule
+}
+
+// FirewallRule mirrors a single nftables rule entry.
+type FirewallRule struct {
+	UUID        string
+	Enabled     bool
+	Description string
+	Target      string
+	Parameters  string
+}
+
+// Rule represents a daemon rule entry.
+type Rule struct {
+	NodeID      string
+	Name        string
+	Description string
+	Action      string
+	Duration    string
+	Enabled     bool
+	Precedence  bool
+	NoLog       bool
+	CreatedAt   time.Time
+	Operator    RuleOperator
+}
+
+type RuleOperator struct {
+	Type      string
+	Operand   string
+	Data      string
+	Sensitive bool
+	Children  []RuleOperator
+}
+
 // Snapshot is a threadsafe copy of the application's state tree.
 type Snapshot struct {
 	ActiveView ViewKind
 	Nodes      []Node
 	Stats      Stats
+	Alerts     []Alert
+	Firewalls  map[string]Firewall
+	Rules      map[string][]Rule
 	LastError  string
 }

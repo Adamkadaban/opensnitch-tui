@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -43,6 +45,15 @@ type Server struct {
 	store *state.Store
 	opts  Options
 	grpc  *grpc.Server
+
+	sessions    map[string]*session
+	sessionsMu  sync.Mutex
+	notifySeqID uint64
+}
+
+type session struct {
+	nodeID string
+	send   chan *pb.Notification
 }
 
 // New creates a new daemon RPC server.
@@ -59,7 +70,7 @@ func New(store *state.Store, opts Options) *Server {
 	if opts.ServerVersion == "" {
 		opts.ServerVersion = "dev"
 	}
-	return &Server{store: store, opts: opts}
+	return &Server{store: store, opts: opts, sessions: make(map[string]*session)}
 }
 
 // Start begins listening for daemon connections until the context is cancelled.
@@ -104,6 +115,8 @@ func (s *Server) Subscribe(ctx context.Context, cfg *pb.ClientConfig) (*pb.Clien
 	node.Status = state.NodeStatusReady
 	node.LastSeen = time.Now()
 	s.store.UpsertNode(node)
+	s.store.SetFirewall(node.ID, convertFirewall(cfg.GetSystemFirewall()))
+	s.store.SetRules(node.ID, convertRules(cfg.GetRules(), node.ID))
 
 	return &pb.ClientConfig{
 		Id:                cfg.GetId(),
@@ -133,8 +146,24 @@ func (s *Server) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingReply, 
 // Notifications drains the streaming channel to keep the daemon connected.
 func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
 	nodeID := peerKey(stream.Context())
+	sess := s.registerSession(nodeID)
+	defer s.unregisterSession(nodeID, sess)
+
+	sendErr := make(chan error, 1)
+	go s.dispatchNotifications(stream, sess, sendErr)
+
 	for {
-		_, err := stream.Recv()
+		select {
+		case err := <-sendErr:
+			if err != nil {
+				s.store.UpdateNodeStatus(nodeID, state.NodeStatusError, err.Error(), time.Now())
+				return err
+			}
+			return nil
+		default:
+		}
+
+		reply, err := stream.Recv()
 		if err == io.EOF {
 			s.store.UpdateNodeStatus(nodeID, state.NodeStatusDisconnected, "notifications closed", time.Now())
 			return nil
@@ -143,14 +172,18 @@ func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
 			s.store.UpdateNodeStatus(nodeID, state.NodeStatusError, err.Error(), time.Now())
 			return err
 		}
+		_ = reply
 	}
 }
 
 // PostAlert records alert text for the UI.
 func (s *Server) PostAlert(ctx context.Context, alert *pb.Alert) (*pb.MsgResponse, error) {
-	if alert != nil {
-		s.store.SetError(alert.GetText())
+	if alert == nil {
+		return &pb.MsgResponse{}, nil
 	}
+	nodeID := peerKey(ctx)
+	converted := convertAlert(alert, nodeID)
+	s.store.AddAlert(converted)
 	return &pb.MsgResponse{Id: alert.GetId()}, nil
 }
 
@@ -241,6 +274,139 @@ func (s *Server) nodeName(id string) string {
 		}
 	}
 	return id
+}
+
+func (s *Server) dispatchNotifications(stream pb.UI_NotificationsServer, sess *session, errCh chan<- error) {
+	for notif := range sess.send {
+		if err := stream.Send(notif); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	errCh <- nil
+}
+
+func (s *Server) registerSession(nodeID string) *session {
+	sess := &session{nodeID: nodeID, send: make(chan *pb.Notification, 8)}
+	s.sessionsMu.Lock()
+	if existing, ok := s.sessions[nodeID]; ok {
+		if existing.send != nil {
+			close(existing.send)
+			existing.send = nil
+		}
+	}
+	s.sessions[nodeID] = sess
+	s.sessionsMu.Unlock()
+	return sess
+}
+
+func (s *Server) unregisterSession(nodeID string, sess *session) {
+	s.sessionsMu.Lock()
+	if current, ok := s.sessions[nodeID]; ok && current == sess {
+		delete(s.sessions, nodeID)
+	}
+	s.sessionsMu.Unlock()
+	if sess.send != nil {
+		close(sess.send)
+		sess.send = nil
+	}
+}
+
+func (s *Server) EnableFirewall(nodeID string) error {
+	return s.enqueueFirewallAction(nodeID, pb.Action_ENABLE_FIREWALL)
+}
+
+func (s *Server) DisableFirewall(nodeID string) error {
+	return s.enqueueFirewallAction(nodeID, pb.Action_DISABLE_FIREWALL)
+}
+
+func (s *Server) ReloadFirewall(nodeID string) error {
+	return s.enqueueFirewallAction(nodeID, pb.Action_RELOAD_FW_RULES)
+}
+
+func (s *Server) enqueueFirewallAction(nodeID string, action pb.Action) error {
+	notif := s.newNotification(action, nodeID)
+	return s.sendNotification(nodeID, notif)
+}
+
+func (s *Server) EnableRule(nodeID, ruleName string) error {
+	return s.enqueueRuleAction(nodeID, ruleName, pb.Action_ENABLE_RULE, func(rule *state.Rule) {
+		rule.Enabled = true
+	})
+}
+
+func (s *Server) DisableRule(nodeID, ruleName string) error {
+	return s.enqueueRuleAction(nodeID, ruleName, pb.Action_DISABLE_RULE, func(rule *state.Rule) {
+		rule.Enabled = false
+	})
+}
+
+func (s *Server) DeleteRule(nodeID, ruleName string) error {
+	rule, err := s.lookupRule(nodeID, ruleName)
+	if err != nil {
+		return err
+	}
+	notif := s.newNotification(pb.Action_DELETE_RULE, nodeID)
+	notif.Rules = []*pb.Rule{serializeRule(rule)}
+	if err := s.sendNotification(nodeID, notif); err != nil {
+		return err
+	}
+	s.store.RemoveRule(nodeID, ruleName)
+	return nil
+}
+
+func (s *Server) enqueueRuleAction(nodeID, ruleName string, action pb.Action, mutate func(*state.Rule)) error {
+	rule, err := s.lookupRule(nodeID, ruleName)
+	if err != nil {
+		return err
+	}
+	if mutate != nil {
+		mutate(&rule)
+	}
+	notif := s.newNotification(action, nodeID)
+	notif.Rules = []*pb.Rule{serializeRule(rule)}
+	if err := s.sendNotification(nodeID, notif); err != nil {
+		return err
+	}
+	if mutate != nil {
+		s.store.UpdateRule(nodeID, ruleName, mutate)
+	}
+	return nil
+}
+
+func (s *Server) newNotification(action pb.Action, nodeID string) *pb.Notification {
+	id := atomic.AddUint64(&s.notifySeqID, 1)
+	return &pb.Notification{
+		Id:         id,
+		Type:       action,
+		ServerName: s.opts.ServerName,
+		ClientName: nodeID,
+	}
+}
+
+func (s *Server) sendNotification(nodeID string, notif *pb.Notification) error {
+	s.sessionsMu.Lock()
+	sess, ok := s.sessions[nodeID]
+	s.sessionsMu.Unlock()
+	if !ok {
+		return fmt.Errorf("node %s not connected", nodeID)
+	}
+	select {
+	case sess.send <- notif:
+		return nil
+	default:
+		return fmt.Errorf("notification buffer full for %s", nodeID)
+	}
+}
+
+func (s *Server) lookupRule(nodeID, ruleName string) (state.Rule, error) {
+	snapshot := s.store.Snapshot()
+	for _, rule := range snapshot.Rules[nodeID] {
+		if rule.Name == ruleName {
+			return rule, nil
+		}
+	}
+	return state.Rule{}, fmt.Errorf("rule %s not found for %s", ruleName, nodeID)
 }
 
 func peerKey(ctx context.Context) string {

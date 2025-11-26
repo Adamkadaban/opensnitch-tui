@@ -13,6 +13,8 @@ type Store struct {
 	nextSub  int
 }
 
+const maxAlerts = 100
+
 // Subscription delivers notifications when the store mutates.
 type Subscription struct {
 	id     int
@@ -26,6 +28,8 @@ func NewStore() *Store {
 		snapshot: Snapshot{
 			ActiveView: ViewDashboard,
 			Nodes:      []Node{},
+			Firewalls:  make(map[string]Firewall),
+			Rules:      make(map[string][]Rule),
 		},
 		subs: make(map[int]*Subscription),
 	}
@@ -38,6 +42,9 @@ func (s *Store) Snapshot() Snapshot {
 
 	copySnap := s.snapshot
 	copySnap.Nodes = cloneNodes(s.snapshot.Nodes)
+	copySnap.Alerts = cloneAlerts(s.snapshot.Alerts)
+	copySnap.Firewalls = cloneFirewalls(s.snapshot.Firewalls)
+	copySnap.Rules = cloneRulesMap(s.snapshot.Rules)
 	return copySnap
 }
 
@@ -138,6 +145,73 @@ func (s *Store) SetError(msg string) {
 	s.notifyLocked()
 }
 
+// SetFirewall updates the firewall state for a node.
+func (s *Store) SetFirewall(nodeID string, fw Firewall) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.snapshot.Firewalls == nil {
+		s.snapshot.Firewalls = make(map[string]Firewall)
+	}
+	s.snapshot.Firewalls[nodeID] = cloneFirewall(fw)
+	s.notifyLocked()
+}
+
+// SetRules replaces the rule list for a node.
+func (s *Store) SetRules(nodeID string, rules []Rule) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.snapshot.Rules == nil {
+		s.snapshot.Rules = make(map[string][]Rule)
+	}
+	s.snapshot.Rules[nodeID] = cloneRuleSlice(rules)
+	s.notifyLocked()
+}
+
+func (s *Store) UpdateRule(nodeID, ruleName string, fn func(*Rule)) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.updateRuleLocked(nodeID, ruleName, fn)
+}
+
+func (s *Store) RemoveRule(nodeID, ruleName string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	list, ok := s.snapshot.Rules[nodeID]
+	if !ok {
+		return false
+	}
+	for idx, rule := range list {
+		if rule.Name != ruleName {
+			continue
+		}
+		list = append(list[:idx], list[idx+1:]...)
+		if len(list) == 0 {
+			delete(s.snapshot.Rules, nodeID)
+		} else {
+			s.snapshot.Rules[nodeID] = list
+		}
+		s.notifyLocked()
+		return true
+	}
+	return false
+}
+
+// AddAlert prepends an alert to the rolling history.
+func (s *Store) AddAlert(alert Alert) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.snapshot.Alerts = append([]Alert{alert}, s.snapshot.Alerts...)
+	if len(s.snapshot.Alerts) > maxAlerts {
+		s.snapshot.Alerts = s.snapshot.Alerts[:maxAlerts]
+	}
+	s.notifyLocked()
+}
+
 // Subscribe returns a subscription that receives a signal whenever the store mutates.
 func (s *Store) Subscribe() *Subscription {
 	s.mu.Lock()
@@ -198,6 +272,87 @@ func cloneNodes(nodes []Node) []Node {
 	return copyNodes
 }
 
+func cloneAlerts(alerts []Alert) []Alert {
+	if len(alerts) == 0 {
+		return nil
+	}
+	copyAlerts := make([]Alert, len(alerts))
+	copy(copyAlerts, alerts)
+	return copyAlerts
+}
+
+func cloneFirewalls(firewalls map[string]Firewall) map[string]Firewall {
+	if len(firewalls) == 0 {
+		return nil
+	}
+	copyMap := make(map[string]Firewall, len(firewalls))
+	for nodeID, fw := range firewalls {
+		copyMap[nodeID] = cloneFirewall(fw)
+	}
+	return copyMap
+}
+
+func cloneFirewall(fw Firewall) Firewall {
+	copyChains := make([]FirewallChain, len(fw.Chains))
+	for i, chain := range fw.Chains {
+		copyChains[i] = FirewallChain{
+			Table:    chain.Table,
+			Name:     chain.Name,
+			Family:   chain.Family,
+			Hook:     chain.Hook,
+			Priority: chain.Priority,
+			Policy:   chain.Policy,
+		}
+		if len(chain.Rules) > 0 {
+			rules := make([]FirewallRule, len(chain.Rules))
+			copy(rules, chain.Rules)
+			copyChains[i].Rules = rules
+		}
+	}
+	fw.Chains = copyChains
+	return fw
+}
+
+func cloneRulesMap(rules map[string][]Rule) map[string][]Rule {
+	if len(rules) == 0 {
+		return nil
+	}
+	copyMap := make(map[string][]Rule, len(rules))
+	for nodeID, list := range rules {
+		copyMap[nodeID] = cloneRuleSlice(list)
+	}
+	return copyMap
+}
+
+func cloneRuleSlice(list []Rule) []Rule {
+	if len(list) == 0 {
+		return nil
+	}
+	copyRules := make([]Rule, len(list))
+	for i, rule := range list {
+		copyRules[i] = cloneRule(rule)
+	}
+	return copyRules
+}
+
+func cloneRule(rule Rule) Rule {
+	rule.Operator = cloneRuleOperator(rule.Operator)
+	return rule
+}
+
+func cloneRuleOperator(op RuleOperator) RuleOperator {
+	if len(op.Children) == 0 {
+		op.Children = nil
+		return op
+	}
+	children := make([]RuleOperator, len(op.Children))
+	for i, child := range op.Children {
+		children[i] = cloneRuleOperator(child)
+	}
+	op.Children = children
+	return op
+}
+
 func (s *Store) upsertNodeLocked(node Node) {
 	idx := s.indexOfLocked(node.ID)
 	if idx == -1 {
@@ -243,4 +398,25 @@ func mergeNodes(current, update Node) Node {
 		update.FirewallEnabled = true
 	}
 	return update
+}
+
+func (s *Store) updateRuleLocked(nodeID, ruleName string, fn func(*Rule)) bool {
+	if fn == nil {
+		return false
+	}
+	list, ok := s.snapshot.Rules[nodeID]
+	if !ok {
+		return false
+	}
+	for idx, rule := range list {
+		if rule.Name != ruleName {
+			continue
+		}
+		fn(&rule)
+		list[idx] = rule
+		s.snapshot.Rules[nodeID] = list
+		s.notifyLocked()
+		return true
+	}
+	return false
 }

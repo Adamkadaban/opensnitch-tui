@@ -35,15 +35,17 @@ func Run(ctx context.Context, opts Options) error {
 	store.SetNodes(configNodesToState(cfg.Nodes))
 
 	km := keymap.DefaultGlobal()
-	rootModel := root.New(store, root.Options{
-		Theme:  palette,
-		KeyMap: &km,
-	})
-
 	daemonSrv := daemon.New(store, daemon.Options{
 		ListenAddr:    opts.ListenAddr,
 		ServerName:    "opensnitch-tui",
 		ServerVersion: "dev",
+	})
+
+	rootModel := root.New(store, root.Options{
+		Theme:    palette,
+		KeyMap:   &km,
+		Firewall: daemonSrv,
+		Rules:    daemonSrv,
 	})
 
 	prog := tea.NewProgram(rootModel, tea.WithAltScreen())

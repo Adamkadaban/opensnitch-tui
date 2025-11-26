@@ -8,19 +8,25 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	"github.com/adamkadaban/opensnitch-tui/internal/keymap"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/alerts"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/dashboard"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/firewall"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/nodes"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/placeholder"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/rules"
 )
 
 // Options controls how the root model is assembled.
 type Options struct {
-	Theme  theme.Theme
-	KeyMap *keymap.Global
+	Theme    theme.Theme
+	KeyMap   *keymap.Global
+	Firewall controller.Firewall
+	Rules    controller.RuleManager
 }
 
 // Model orchestrates routed Bubble Tea views and global UI chrome.
@@ -47,8 +53,9 @@ func New(store *state.Store, opts Options) *Model {
 
 	views := map[state.ViewKind]view.Model{
 		state.ViewDashboard: dashboard.New(store, opts.Theme),
-		state.ViewRules:     placeholder.New("Rules", "Rules management UI coming soon.", opts.Theme),
-		state.ViewFirewall:  placeholder.New("Firewall", "Firewall inspection UI coming soon.", opts.Theme),
+		state.ViewAlerts:    alerts.New(store, opts.Theme),
+		state.ViewRules:     rules.New(store, opts.Theme, opts.Rules),
+		state.ViewFirewall:  firewall.New(store, opts.Theme, opts.Firewall),
 		state.ViewNodes:     nodes.New(store, opts.Theme),
 		state.ViewSettings:  placeholder.New("Settings", "Settings view coming soon.", opts.Theme),
 	}
