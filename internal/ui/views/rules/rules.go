@@ -45,15 +45,6 @@ const (
 	minOperatorWidth   = 14
 )
 
-var (
-	zebraDarkEven  = lipgloss.Color("#1f2a3a")
-	zebraDarkOdd   = lipgloss.Color("#111624")
-	zebraLightEven = lipgloss.Color("#ffffff")
-	zebraLightOdd  = lipgloss.Color("#eef2f7")
-	selectedDark   = lipgloss.Color("#2d3b52")
-	selectedLight  = lipgloss.Color("#cfe0ff")
-)
-
 type tableLayout struct {
 	cursor     int
 	name       int
@@ -147,6 +138,10 @@ func (m *Model) Title() string { return "Rules" }
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+}
+
+func (m *Model) SetTheme(th theme.Theme) {
+	m.theme = th
 }
 
 func (m *Model) renderNodes(snapshot state.Snapshot) string {
@@ -579,29 +574,14 @@ func stripBackground(style lipgloss.Style) lipgloss.Style {
 }
 
 func (m *Model) rowStripeColor(rowIdx int) lipgloss.Color {
-	var color lipgloss.Color
-	light := m.theme.Mode == theme.ModeLight
 	if rowIdx%2 == 0 {
-		if light {
-			color = zebraLightEven
-		} else {
-			color = zebraDarkEven
-		}
-	} else {
-		if light {
-			color = zebraLightOdd
-		} else {
-			color = zebraDarkOdd
-		}
+		return m.theme.TableRowEven
 	}
-	return color
+	return m.theme.TableRowOdd
 }
 
 func (m *Model) selectedRowColor() lipgloss.Color {
-	if m.theme.Mode == theme.ModeLight {
-		return selectedLight
-	}
-	return selectedDark
+	return m.theme.TableRowSelect
 }
 
 func colorRuleAction(th theme.Theme, action string) string {

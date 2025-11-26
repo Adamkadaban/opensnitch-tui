@@ -65,6 +65,10 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 }
 
+func (m *Model) SetTheme(th theme.Theme) {
+	m.theme = th
+}
+
 func (m *Model) statusStyle(status state.NodeStatus) lipgloss.Style {
 	switch status {
 	case state.NodeStatusReady:

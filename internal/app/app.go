@@ -39,11 +39,18 @@ func Run(ctx context.Context, opts Options) error {
 	cfg.DefaultPromptDuration = config.NormalizePromptDuration(cfg.DefaultPromptDuration)
 	cfg.DefaultPromptTarget = config.NormalizePromptTarget(cfg.DefaultPromptTarget)
 	cfg.PromptTimeoutSeconds = config.NormalizePromptTimeoutSeconds(cfg.PromptTimeoutSeconds)
+	cfg.Theme = config.NormalizeThemeName(cfg.Theme)
 
-	palette := theme.New(theme.Options{Override: opts.Theme, Preferred: cfg.Theme})
+	selectedTheme := cfg.Theme
+	if opts.Theme != "" {
+		selectedTheme = config.NormalizeThemeName(opts.Theme)
+	}
+
+	palette := theme.New(theme.Options{Name: selectedTheme})
 	store := state.NewStore()
 	store.SetNodes(configNodesToState(cfg.Nodes))
 	store.SetSettings(state.Settings{
+		ThemeName:             selectedTheme,
 		DefaultPromptAction:   cfg.DefaultPromptAction,
 		DefaultPromptDuration: cfg.DefaultPromptDuration,
 		DefaultPromptTarget:   cfg.DefaultPromptTarget,

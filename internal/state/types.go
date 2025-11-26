@@ -104,6 +104,7 @@ type RuleOperator struct {
 
 // Settings captures user preferences affecting UI behavior.
 type Settings struct {
+	ThemeName             string
 	DefaultPromptAction   string
 	DefaultPromptDuration string
 	DefaultPromptTarget   string

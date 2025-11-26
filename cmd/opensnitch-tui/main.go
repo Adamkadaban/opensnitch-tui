@@ -19,7 +19,7 @@ func main() {
 	)
 
 	flag.StringVar(&configPath, "config", "", "Path to the config file (defaults to XDG config dir)")
-	flag.StringVar(&themeName, "theme", "", "Override theme (light, dark, auto)")
+	flag.StringVar(&themeName, "theme", "", "Override theme (midnight, canopy, dawn)")
 	flag.StringVar(&listenAddr, "listen", "127.0.0.1:50051", "gRPC listen address for daemon connections")
 	flag.Parse()
 

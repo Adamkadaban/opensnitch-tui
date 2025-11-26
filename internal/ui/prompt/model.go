@@ -89,6 +89,10 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 }
 
+func (m *Model) SetTheme(th theme.Theme) {
+	m.theme = th
+}
+
 func (m *Model) Active() bool {
 	snapshot := m.store.Snapshot()
 	return m.shouldDisplayPrompts(snapshot)

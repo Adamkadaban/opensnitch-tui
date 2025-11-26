@@ -6,15 +6,21 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	ThemeAuto  = "auto"
-	ThemeDark  = "dark"
-	ThemeLight = "light"
+	ThemeAuto     = "auto"
+	ThemeDark     = "dark"
+	ThemeLight    = "light"
+	ThemeMidnight = "midnight"
+	ThemeCanopy   = "canopy"
+	ThemeDawn     = "dawn"
 )
+
+const DefaultThemeName = ThemeMidnight
 
 // Config captures persisted user preferences and known daemon nodes.
 type Config struct {
@@ -66,7 +72,7 @@ func Load(path string) (Config, error) {
 // Default returns a usable configuration when no file exists yet.
 func Default() Config {
 	return Config{
-		Theme:                 ThemeAuto,
+		Theme:                 DefaultThemeName,
 		DefaultPromptAction:   DefaultPromptAction,
 		DefaultPromptDuration: DefaultPromptDuration,
 		DefaultPromptTarget:   DefaultPromptTarget,
@@ -138,6 +144,23 @@ func NormalizePromptTimeoutSeconds(seconds int) int {
 		return 600
 	}
 	return seconds
+}
+
+// NormalizeThemeName clamps stored theme names to supported palettes.
+func NormalizeThemeName(name string) string {
+	value := strings.ToLower(strings.TrimSpace(name))
+	switch value {
+	case "", ThemeMidnight:
+		return ThemeMidnight
+	case ThemeCanopy:
+		return ThemeCanopy
+	case ThemeDawn:
+		return ThemeDawn
+	case ThemeAuto, ThemeDark, ThemeLight:
+		return ThemeMidnight
+	default:
+		return ThemeMidnight
+	}
 }
 
 // ResolvePath returns the concrete config file path.

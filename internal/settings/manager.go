@@ -15,7 +15,21 @@ type Manager struct {
 
 // NewManager returns a manager initialized with the current configuration snapshot.
 func NewManager(path string, cfg config.Config) *Manager {
+	cfg.Theme = config.NormalizeThemeName(cfg.Theme)
 	return &Manager{path: path, cfg: cfg}
+}
+
+// SetTheme updates the preferred color palette and writes it to disk.
+func (m *Manager) SetTheme(name string) (string, error) {
+	normalized := config.NormalizeThemeName(name)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.Theme = normalized
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return "", err
+	}
+	return normalized, nil
 }
 
 // SetDefaultPromptAction stores the normalized default prompt action and writes it to disk.

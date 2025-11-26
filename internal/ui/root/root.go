@@ -30,13 +30,18 @@ type Options struct {
 	Settings controller.SettingsManager
 }
 
+type themedView interface {
+	SetTheme(theme.Theme)
+}
+
 // Model orchestrates routed Bubble Tea views and global UI chrome.
 type Model struct {
-	store  *state.Store
-	sub    *state.Subscription
-	keymap keymap.Global
-	theme  theme.Theme
-	prompt *prompt.Model
+	store     *state.Store
+	sub       *state.Subscription
+	keymap    keymap.Global
+	theme     theme.Theme
+	themeName string
+	prompt    *prompt.Model
 
 	views  map[state.ViewKind]view.Model
 	order  []state.ViewKind
@@ -64,16 +69,18 @@ func New(store *state.Store, opts Options) *Model {
 	promptModel := prompt.New(store, opts.Theme, opts.Prompts)
 
 	model := &Model{
-		store:  store,
-		keymap: keyMap,
-		theme:  opts.Theme,
-		prompt: promptModel,
-		views:  views,
-		order:  append([]state.ViewKind{}, state.DefaultViewOrder...),
-		active: state.ViewDashboard,
+		store:     store,
+		keymap:    keyMap,
+		theme:     opts.Theme,
+		themeName: theme.Normalize(opts.Theme.Name),
+		prompt:    promptModel,
+		views:     views,
+		order:     append([]state.ViewKind{}, state.DefaultViewOrder...),
+		active:    state.ViewDashboard,
 	}
 	if store != nil {
 		model.sub = store.Subscribe()
+		model.applyTheme(theme.New(theme.Options{Name: store.Snapshot().Settings.ThemeName}))
 	}
 	return model
 }
@@ -95,6 +102,7 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case storeChangeMsg:
+		m.onStoreChanged()
 		return m, waitForStoreChanges(m.sub)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -191,6 +199,39 @@ func (m *Model) renderTabs() string {
 		labels = append(labels, m.theme.RenderTab(view.Title(), kind == m.active))
 	}
 	return strings.Join(labels, " ")
+}
+
+func (m *Model) onStoreChanged() {
+	if m.store == nil {
+		return
+	}
+	snapshot := m.store.Snapshot()
+	desired := theme.Normalize(snapshot.Settings.ThemeName)
+	if desired == "" {
+		desired = m.themeName
+	}
+	if desired == m.themeName {
+		return
+	}
+	m.applyTheme(theme.New(theme.Options{Name: desired}))
+}
+
+func (m *Model) applyTheme(th theme.Theme) {
+	if th.Name == "" {
+		return
+	}
+	m.theme = th
+	m.themeName = th.Name
+	for _, v := range m.views {
+		if tv, ok := v.(themedView); ok {
+			tv.SetTheme(th)
+		}
+	}
+	if m.prompt != nil {
+		if tv, ok := any(m.prompt).(themedView); ok {
+			tv.SetTheme(th)
+		}
+	}
 }
 
 func (m *Model) footerLine(snapshot state.Snapshot) string {

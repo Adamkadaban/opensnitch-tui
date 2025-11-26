@@ -14,6 +14,7 @@ type PromptManager interface {
 
 // SettingsManager persists UI configuration choices.
 type SettingsManager interface {
+	SetTheme(name string) (string, error)
 	SetDefaultPromptAction(action string) (string, error)
 	SetDefaultPromptDuration(duration string) (string, error)
 	SetDefaultPromptTarget(target string) (string, error)

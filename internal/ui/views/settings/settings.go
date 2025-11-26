@@ -25,6 +25,7 @@ type Model struct {
 	height int
 
 	focus           field
+	themeIdx        int
 	actionIdx       int
 	durationIdx     int
 	targetIdx       int
@@ -36,14 +37,15 @@ type Model struct {
 type field int
 
 const (
-	fieldAction field = iota
+	fieldTheme field = iota
+	fieldAction
 	fieldDuration
 	fieldTarget
 	fieldPromptTimeout
 	fieldAlertsInterrupt
 )
 
-const settingsFieldCount = 5
+const settingsFieldCount = 6
 
 type option struct {
 	label string
@@ -80,6 +82,8 @@ var promptTimeouts = []option{
 	{label: "300s", value: "300"},
 }
 
+var themeOptions = buildThemeOptions()
+
 // New constructs a settings view model.
 func New(store *state.Store, th theme.Theme, ctrl controller.SettingsManager) view.Model {
 	m := &Model{store: store, theme: th, controller: ctrl}
@@ -94,6 +98,10 @@ func (m *Model) Title() string { return "Settings" }
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+}
+
+func (m *Model) SetTheme(th theme.Theme) {
+	m.theme = th
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -123,6 +131,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) View() string {
 	general := []string{
+		m.renderRow("Theme", themeOptions, m.themeIdx, m.focus == fieldTheme),
 		m.renderRow("Default action", promptActions, m.actionIdx, m.focus == fieldAction),
 		m.renderRow("Default duration", promptDurations, m.durationIdx, m.focus == fieldDuration),
 		m.renderRow("Default target", promptTargets, m.targetIdx, m.focus == fieldTarget),
@@ -147,6 +156,7 @@ func (m *Model) View() string {
 
 func (m *Model) syncSelection() {
 	snapshot := m.store.Snapshot()
+	m.themeIdx = optionIndex(themeOptions, snapshot.Settings.ThemeName)
 	m.actionIdx = optionIndex(promptActions, snapshot.Settings.DefaultPromptAction)
 	m.durationIdx = optionIndex(promptDurations, snapshot.Settings.DefaultPromptDuration)
 	m.targetIdx = optionIndex(promptTargets, snapshot.Settings.DefaultPromptTarget)
@@ -164,6 +174,8 @@ func (m *Model) persistFocused() {
 		return
 	}
 	switch m.focus {
+	case fieldTheme:
+		m.persistTheme()
 	case fieldAction:
 		m.persistAction()
 	case fieldDuration:
@@ -180,6 +192,10 @@ func (m *Model) persistFocused() {
 func (m *Model) persistAll() {
 	if m.controller == nil {
 		m.status = m.theme.Danger.Render("Settings controller unavailable")
+		return
+	}
+	if _, err := m.saveTheme(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save theme: %v", err))
 		return
 	}
 	if _, err := m.saveAction(); err != nil {
@@ -203,6 +219,14 @@ func (m *Model) persistAll() {
 		return
 	}
 	m.status = m.theme.Success.Render("Settings saved")
+}
+
+func (m *Model) persistTheme() {
+	if value, err := m.saveTheme(); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save theme: %v", err))
+	} else {
+		m.status = m.theme.Success.Render(fmt.Sprintf("Theme switched to %s", theme.Label(value)))
+	}
 }
 
 func (m *Model) contentWidth() int {
@@ -232,6 +256,8 @@ func max(a, b int) int {
 
 func (m *Model) shiftSelection(delta int) {
 	switch m.focus {
+	case fieldTheme:
+		m.themeIdx = wrap(m.themeIdx+delta, len(themeOptions))
 	case fieldAction:
 		m.actionIdx = wrap(m.actionIdx+delta, len(promptActions))
 	case fieldDuration:
@@ -331,6 +357,19 @@ func (m *Model) saveTarget() (string, error) {
 	return value, nil
 }
 
+func (m *Model) saveTheme() (string, error) {
+	choice := themeOptions[m.themeIdx].value
+	value, err := m.controller.SetTheme(choice)
+	if err != nil {
+		return "", err
+	}
+	m.themeIdx = optionIndex(themeOptions, value)
+	m.updateSettings(func(settings *state.Settings) {
+		settings.ThemeName = value
+	})
+	return value, nil
+}
+
 func (m *Model) savePromptTimeout() (int, error) {
 	seconds := optionSeconds(promptTimeouts[m.timeoutIdx])
 	value, err := m.controller.SetPromptTimeout(seconds)
@@ -417,4 +456,13 @@ func optionSeconds(opt option) int {
 		return 30
 	}
 	return seconds
+}
+
+func buildThemeOptions() []option {
+	presets := theme.Presets()
+	opts := make([]option, 0, len(presets))
+	for _, preset := range presets {
+		opts = append(opts, option{label: preset.Label, value: preset.Name})
+	}
+	return opts
 }

@@ -64,6 +64,10 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 }
 
+func (m *Model) SetTheme(th theme.Theme) {
+	m.theme = th
+}
+
 func (m *Model) renderAlert(alert state.Alert) string {
 	left := fmt.Sprintf("[%s][%s] %s", strings.ToUpper(alert.Priority), strings.ToUpper(alert.Type), alert.Text)
 	meta := []string{}

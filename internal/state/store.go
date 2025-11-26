@@ -34,6 +34,7 @@ func NewStore() *Store {
 			Nodes:      []Node{},
 			Rules:      make(map[string][]Rule),
 			Settings: Settings{
+				ThemeName:             config.DefaultThemeName,
 				DefaultPromptAction:   config.DefaultPromptAction,
 				DefaultPromptDuration: config.DefaultPromptDuration,
 				DefaultPromptTarget:   config.DefaultPromptTarget,

@@ -73,6 +73,11 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 }
 
+// SetTheme updates the active palette.
+func (m *Model) SetTheme(th theme.Theme) {
+	m.theme = th
+}
+
 func (m *Model) renderStat(label string, value uint64) string {
 	const cardOverhead = 8 // border (2) + padding (4) + margin (2)
 	cardWidth := max(16, m.width/4-cardOverhead)
