@@ -3,6 +3,8 @@ package state
 import (
 	"sync"
 	"time"
+
+	"github.com/adamkadaban/opensnitch-tui/internal/config"
 )
 
 // Store guards shared application state needed by multiple Bubble Tea models.
@@ -29,8 +31,12 @@ func NewStore() *Store {
 			ActiveView: ViewDashboard,
 			Nodes:      []Node{},
 			Rules:      make(map[string][]Rule),
-			Settings:   Settings{DefaultPromptAction: "deny"},
-			Prompts:    []Prompt{},
+			Settings: Settings{
+				DefaultPromptAction:   config.DefaultPromptAction,
+				DefaultPromptDuration: config.DefaultPromptDuration,
+				DefaultPromptTarget:   config.DefaultPromptTarget,
+			},
+			Prompts: []Prompt{},
 		},
 		subs: make(map[int]*Subscription),
 	}

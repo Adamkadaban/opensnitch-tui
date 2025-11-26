@@ -31,6 +31,32 @@ func (m *Manager) SetDefaultPromptAction(action string) (string, error) {
 	return normalized, nil
 }
 
+// SetDefaultPromptDuration stores the normalized default prompt duration and writes it to disk.
+func (m *Manager) SetDefaultPromptDuration(duration string) (string, error) {
+	normalized := config.NormalizePromptDuration(duration)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.DefaultPromptDuration = normalized
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
+// SetDefaultPromptTarget stores the normalized default prompt target and writes it to disk.
+func (m *Manager) SetDefaultPromptTarget(target string) (string, error) {
+	normalized := config.NormalizePromptTarget(target)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.DefaultPromptTarget = normalized
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
 // Config returns a copy of the managed config.
 func (m *Manager) Config() config.Config {
 	m.mu.Lock()

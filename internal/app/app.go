@@ -35,11 +35,17 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	cfg.DefaultPromptAction = config.NormalizePromptAction(cfg.DefaultPromptAction)
+	cfg.DefaultPromptDuration = config.NormalizePromptDuration(cfg.DefaultPromptDuration)
+	cfg.DefaultPromptTarget = config.NormalizePromptTarget(cfg.DefaultPromptTarget)
 
 	palette := theme.New(theme.Options{Override: opts.Theme, Preferred: cfg.Theme})
 	store := state.NewStore()
 	store.SetNodes(configNodesToState(cfg.Nodes))
-	store.SetSettings(state.Settings{DefaultPromptAction: config.NormalizePromptAction(cfg.DefaultPromptAction)})
+	store.SetSettings(state.Settings{
+		DefaultPromptAction:   cfg.DefaultPromptAction,
+		DefaultPromptDuration: cfg.DefaultPromptDuration,
+		DefaultPromptTarget:   cfg.DefaultPromptTarget,
+	})
 
 	km := keymap.DefaultGlobal()
 	daemonSrv := daemon.New(store, daemon.Options{

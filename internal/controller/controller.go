@@ -15,6 +15,8 @@ type PromptManager interface {
 // SettingsManager persists UI configuration choices.
 type SettingsManager interface {
 	SetDefaultPromptAction(action string) (string, error)
+	SetDefaultPromptDuration(duration string) (string, error)
+	SetDefaultPromptTarget(target string) (string, error)
 }
 
 // PromptDecision captures an operator's selection for a pending prompt.

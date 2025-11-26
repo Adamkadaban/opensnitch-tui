@@ -198,14 +198,18 @@ func (m *Model) promptState() (state.Prompt, []targetOption, *formState, bool) {
 	}
 	prompt := snapshot.Prompts[m.promptIdx]
 	targets := targetOptionsFor(prompt.Connection)
-	form := m.ensureForm(prompt.ID, len(targets))
+	form := m.ensureForm(prompt.ID, targets)
 	return prompt, targets, form, true
 }
 
-func (m *Model) ensureForm(id string, targets int) *formState {
+func (m *Model) ensureForm(id string, targets []targetOption) *formState {
 	form, ok := m.forms[id]
 	if !ok {
-		form = &formState{action: m.defaultActionIndex(), duration: 0, target: 0}
+		form = &formState{
+			action:   m.defaultActionIndex(),
+			duration: m.defaultDurationIndex(),
+			target:   m.defaultTargetIndex(targets),
+		}
 		m.forms[id] = form
 	}
 	if form.action >= len(actionOptions) {
@@ -214,10 +218,10 @@ func (m *Model) ensureForm(id string, targets int) *formState {
 	if form.duration >= len(durationOptions) {
 		form.duration = len(durationOptions) - 1
 	}
-	if targets == 0 {
+	if len(targets) == 0 {
 		form.target = 0
-	} else if form.target >= targets {
-		form.target = targets - 1
+	} else if form.target >= len(targets) {
+		form.target = len(targets) - 1
 	}
 	return form
 }
@@ -358,6 +362,31 @@ func (m *Model) defaultActionIndex() int {
 	snapshot := m.store.Snapshot()
 	current := snapshot.Settings.DefaultPromptAction
 	for idx, opt := range actionOptions {
+		if string(opt.value) == current {
+			return idx
+		}
+	}
+	return 0
+}
+
+func (m *Model) defaultDurationIndex() int {
+	snapshot := m.store.Snapshot()
+	current := snapshot.Settings.DefaultPromptDuration
+	for idx, opt := range durationOptions {
+		if string(opt.value) == current {
+			return idx
+		}
+	}
+	return 0
+}
+
+func (m *Model) defaultTargetIndex(targets []targetOption) int {
+	if len(targets) == 0 {
+		return 0
+	}
+	snapshot := m.store.Snapshot()
+	current := snapshot.Settings.DefaultPromptTarget
+	for idx, opt := range targets {
 		if string(opt.value) == current {
 			return idx
 		}

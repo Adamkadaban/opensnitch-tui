@@ -95,7 +95,9 @@ type RuleOperator struct {
 
 // Settings captures user preferences affecting UI behavior.
 type Settings struct {
-	DefaultPromptAction string
+	DefaultPromptAction   string
+	DefaultPromptDuration string
+	DefaultPromptTarget   string
 }
 
 // Connection stores the details of an outbound connection awaiting operator input.

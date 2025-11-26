@@ -493,38 +493,28 @@ func (s *Server) defaultPromptDecision(prompt state.Prompt) controller.PromptDec
 		PromptID: prompt.ID,
 		Action:   controller.PromptActionDeny,
 		Duration: controller.PromptDurationOnce,
-		Target:   controller.PromptTargetProcessPath,
+		Target:   bestAvailableTarget(prompt.Connection),
 	}
 	settings := s.store.Snapshot().Settings
 	if settings.DefaultPromptAction != "" {
 		decision.Action = controller.PromptAction(settings.DefaultPromptAction)
 	}
-	conn := prompt.Connection
-	switch {
-	case conn.ProcessPath != "":
-		decision.Target = controller.PromptTargetProcessPath
-	case len(conn.ProcessArgs) > 0:
-		decision.Target = controller.PromptTargetProcessCmd
-	case conn.DstHost != "":
-		decision.Target = controller.PromptTargetDestinationHost
-	case conn.DstIP != "":
-		decision.Target = controller.PromptTargetDestinationIP
-	case conn.DstPort != 0:
-		decision.Target = controller.PromptTargetDestinationPort
-	default:
-		decision.Target = controller.PromptTargetProcessID
+	if settings.DefaultPromptDuration != "" {
+		decision.Duration = controller.PromptDuration(settings.DefaultPromptDuration)
+	}
+	if preferred := controller.PromptTarget(settings.DefaultPromptTarget); preferred != "" && targetAvailable(prompt.Connection, preferred) {
+		decision.Target = preferred
 	}
 	decision.Action = normalizePromptAction(decision.Action)
+	decision.Duration = normalizePromptDuration(decision.Duration)
 	return decision
 }
 
 func buildRuleFromDecision(prompt state.Prompt, decision controller.PromptDecision) (*pb.Rule, error) {
 	decision.Action = normalizePromptAction(decision.Action)
-	if decision.Duration == "" {
-		decision.Duration = controller.PromptDurationOnce
-	}
+	decision.Duration = normalizePromptDuration(decision.Duration)
 	if decision.Target == "" {
-		decision.Target = controller.PromptTargetProcessPath
+		decision.Target = bestAvailableTarget(prompt.Connection)
 	}
 	operator, err := operatorForTarget(prompt.Connection, decision.Target)
 	if err != nil {
@@ -609,6 +599,51 @@ func normalizePromptAction(action controller.PromptAction) controller.PromptActi
 		return action
 	default:
 		return controller.PromptActionDeny
+	}
+}
+
+func normalizePromptDuration(duration controller.PromptDuration) controller.PromptDuration {
+	switch duration {
+	case controller.PromptDurationOnce, controller.PromptDurationUntilRestart, controller.PromptDurationAlways:
+		return duration
+	default:
+		return controller.PromptDurationOnce
+	}
+}
+
+func targetAvailable(conn state.Connection, target controller.PromptTarget) bool {
+	switch target {
+	case controller.PromptTargetProcessPath:
+		return conn.ProcessPath != ""
+	case controller.PromptTargetProcessCmd:
+		return len(conn.ProcessArgs) > 0 || conn.ProcessPath != ""
+	case controller.PromptTargetDestinationHost:
+		return conn.DstHost != ""
+	case controller.PromptTargetDestinationIP:
+		return conn.DstIP != ""
+	case controller.PromptTargetDestinationPort:
+		return conn.DstPort != 0
+	case controller.PromptTargetProcessID, controller.PromptTargetUserID:
+		return true
+	default:
+		return false
+	}
+}
+
+func bestAvailableTarget(conn state.Connection) controller.PromptTarget {
+	switch {
+	case conn.ProcessPath != "":
+		return controller.PromptTargetProcessPath
+	case len(conn.ProcessArgs) > 0:
+		return controller.PromptTargetProcessCmd
+	case conn.DstHost != "":
+		return controller.PromptTargetDestinationHost
+	case conn.DstIP != "":
+		return controller.PromptTargetDestinationIP
+	case conn.DstPort != 0:
+		return controller.PromptTargetDestinationPort
+	default:
+		return controller.PromptTargetProcessID
 	}
 }
 

@@ -18,9 +18,11 @@ const (
 
 // Config captures persisted user preferences and known daemon nodes.
 type Config struct {
-	Theme               string `yaml:"theme"`
-	DefaultPromptAction string `yaml:"default_prompt_action"`
-	Nodes               []Node `yaml:"nodes"`
+	Theme                 string `yaml:"theme"`
+	DefaultPromptAction   string `yaml:"default_prompt_action"`
+	DefaultPromptDuration string `yaml:"default_prompt_duration"`
+	DefaultPromptTarget   string `yaml:"default_prompt_target"`
+	Nodes                 []Node `yaml:"nodes"`
 }
 
 // Node contains metadata required to connect to an OpenSnitch daemon instance.
@@ -62,9 +64,11 @@ func Load(path string) (Config, error) {
 // Default returns a usable configuration when no file exists yet.
 func Default() Config {
 	return Config{
-		Theme:               ThemeAuto,
-		DefaultPromptAction: DefaultPromptAction,
-		Nodes:               []Node{},
+		Theme:                 ThemeAuto,
+		DefaultPromptAction:   DefaultPromptAction,
+		DefaultPromptDuration: DefaultPromptDuration,
+		DefaultPromptTarget:   DefaultPromptTarget,
+		Nodes:                 []Node{},
 	}
 }
 
@@ -86,6 +90,8 @@ func resolvePath(path string) (string, error) {
 }
 
 const DefaultPromptAction = "deny"
+const DefaultPromptDuration = "once"
+const DefaultPromptTarget = "process.path"
 
 // NormalizePromptAction ensures stored prompts actions stay within supported values.
 func NormalizePromptAction(action string) string {
@@ -94,6 +100,26 @@ func NormalizePromptAction(action string) string {
 		return action
 	default:
 		return DefaultPromptAction
+	}
+}
+
+// NormalizePromptDuration clamps duration defaults to supported values.
+func NormalizePromptDuration(duration string) string {
+	switch duration {
+	case "once", "until restart", "always":
+		return duration
+	default:
+		return DefaultPromptDuration
+	}
+}
+
+// NormalizePromptTarget restricts target defaults to known operands.
+func NormalizePromptTarget(target string) string {
+	switch target {
+	case "process.path", "process.command", "process.id", "user.id", "dest.ip", "dest.host", "dest.port":
+		return target
+	default:
+		return DefaultPromptTarget
 	}
 }
 
