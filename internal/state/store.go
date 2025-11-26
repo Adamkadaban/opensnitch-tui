@@ -28,7 +28,6 @@ func NewStore() *Store {
 		snapshot: Snapshot{
 			ActiveView: ViewDashboard,
 			Nodes:      []Node{},
-			Firewalls:  make(map[string]Firewall),
 			Rules:      make(map[string][]Rule),
 		},
 		subs: make(map[int]*Subscription),
@@ -43,7 +42,6 @@ func (s *Store) Snapshot() Snapshot {
 	copySnap := s.snapshot
 	copySnap.Nodes = cloneNodes(s.snapshot.Nodes)
 	copySnap.Alerts = cloneAlerts(s.snapshot.Alerts)
-	copySnap.Firewalls = cloneFirewalls(s.snapshot.Firewalls)
 	copySnap.Rules = cloneRulesMap(s.snapshot.Rules)
 	return copySnap
 }
@@ -142,18 +140,6 @@ func (s *Store) SetError(msg string) {
 	defer s.mu.Unlock()
 
 	s.snapshot.LastError = msg
-	s.notifyLocked()
-}
-
-// SetFirewall updates the firewall state for a node.
-func (s *Store) SetFirewall(nodeID string, fw Firewall) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.snapshot.Firewalls == nil {
-		s.snapshot.Firewalls = make(map[string]Firewall)
-	}
-	s.snapshot.Firewalls[nodeID] = cloneFirewall(fw)
 	s.notifyLocked()
 }
 
@@ -279,38 +265,6 @@ func cloneAlerts(alerts []Alert) []Alert {
 	copyAlerts := make([]Alert, len(alerts))
 	copy(copyAlerts, alerts)
 	return copyAlerts
-}
-
-func cloneFirewalls(firewalls map[string]Firewall) map[string]Firewall {
-	if len(firewalls) == 0 {
-		return nil
-	}
-	copyMap := make(map[string]Firewall, len(firewalls))
-	for nodeID, fw := range firewalls {
-		copyMap[nodeID] = cloneFirewall(fw)
-	}
-	return copyMap
-}
-
-func cloneFirewall(fw Firewall) Firewall {
-	copyChains := make([]FirewallChain, len(fw.Chains))
-	for i, chain := range fw.Chains {
-		copyChains[i] = FirewallChain{
-			Table:    chain.Table,
-			Name:     chain.Name,
-			Family:   chain.Family,
-			Hook:     chain.Hook,
-			Priority: chain.Priority,
-			Policy:   chain.Policy,
-		}
-		if len(chain.Rules) > 0 {
-			rules := make([]FirewallRule, len(chain.Rules))
-			copy(rules, chain.Rules)
-			copyChains[i].Rules = rules
-		}
-	}
-	fw.Chains = copyChains
-	return fw
 }
 
 func cloneRulesMap(rules map[string][]Rule) map[string][]Rule {

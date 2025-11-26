@@ -9,7 +9,6 @@ const (
 	ViewDashboard ViewKind = "dashboard"
 	ViewAlerts    ViewKind = "alerts"
 	ViewRules     ViewKind = "rules"
-	ViewFirewall  ViewKind = "firewall"
 	ViewNodes     ViewKind = "nodes"
 	ViewSettings  ViewKind = "settings"
 )
@@ -19,7 +18,6 @@ var DefaultViewOrder = []ViewKind{
 	ViewDashboard,
 	ViewAlerts,
 	ViewRules,
-	ViewFirewall,
 	ViewNodes,
 	ViewSettings,
 }
@@ -73,33 +71,6 @@ type Alert struct {
 	CreatedAt time.Time
 }
 
-// Firewall represents nftables information for a node.
-type Firewall struct {
-	Enabled bool
-	Version uint32
-	Chains  []FirewallChain
-}
-
-// FirewallChain contains rules for a specific nftables chain.
-type FirewallChain struct {
-	Table    string
-	Name     string
-	Family   string
-	Hook     string
-	Priority string
-	Policy   string
-	Rules    []FirewallRule
-}
-
-// FirewallRule mirrors a single nftables rule entry.
-type FirewallRule struct {
-	UUID        string
-	Enabled     bool
-	Description string
-	Target      string
-	Parameters  string
-}
-
 // Rule represents a daemon rule entry.
 type Rule struct {
 	NodeID      string
@@ -128,7 +99,6 @@ type Snapshot struct {
 	Nodes      []Node
 	Stats      Stats
 	Alerts     []Alert
-	Firewalls  map[string]Firewall
 	Rules      map[string][]Rule
 	LastError  string
 }

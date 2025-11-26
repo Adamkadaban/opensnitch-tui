@@ -66,32 +66,6 @@ func TestServerPostAlertStoresAlert(t *testing.T) {
 	}
 }
 
-func TestServerEnableFirewallRequiresSession(t *testing.T) {
-	store := state.NewStore()
-	srv := New(store, Options{})
-	if err := srv.EnableFirewall("node-1"); err == nil {
-		t.Fatalf("expected error when node not connected")
-	}
-}
-
-func TestServerEnableFirewallEnqueuesNotification(t *testing.T) {
-	store := state.NewStore()
-	srv := New(store, Options{})
-	sess := &session{nodeID: "node-1", send: make(chan *pb.Notification, 1)}
-	srv.sessions["node-1"] = sess
-	if err := srv.EnableFirewall("node-1"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	select {
-	case notif := <-sess.send:
-		if notif.Type != pb.Action_ENABLE_FIREWALL {
-			t.Fatalf("expected enable firewall action, got %v", notif.Type)
-		}
-	default:
-		t.Fatal("expected notification to be queued")
-	}
-}
-
 func TestServerSubscribeStoresRules(t *testing.T) {
 	store := state.NewStore()
 	srv := New(store, Options{})

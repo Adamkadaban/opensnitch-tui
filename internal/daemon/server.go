@@ -115,7 +115,6 @@ func (s *Server) Subscribe(ctx context.Context, cfg *pb.ClientConfig) (*pb.Clien
 	node.Status = state.NodeStatusReady
 	node.LastSeen = time.Now()
 	s.store.UpsertNode(node)
-	s.store.SetFirewall(node.ID, convertFirewall(cfg.GetSystemFirewall()))
 	s.store.SetRules(node.ID, convertRules(cfg.GetRules(), node.ID))
 
 	return &pb.ClientConfig{
@@ -310,23 +309,6 @@ func (s *Server) unregisterSession(nodeID string, sess *session) {
 		close(sess.send)
 		sess.send = nil
 	}
-}
-
-func (s *Server) EnableFirewall(nodeID string) error {
-	return s.enqueueFirewallAction(nodeID, pb.Action_ENABLE_FIREWALL)
-}
-
-func (s *Server) DisableFirewall(nodeID string) error {
-	return s.enqueueFirewallAction(nodeID, pb.Action_DISABLE_FIREWALL)
-}
-
-func (s *Server) ReloadFirewall(nodeID string) error {
-	return s.enqueueFirewallAction(nodeID, pb.Action_RELOAD_FW_RULES)
-}
-
-func (s *Server) enqueueFirewallAction(nodeID string, action pb.Action) error {
-	notif := s.newNotification(action, nodeID)
-	return s.sendNotification(nodeID, notif)
 }
 
 func (s *Server) EnableRule(nodeID, ruleName string) error {

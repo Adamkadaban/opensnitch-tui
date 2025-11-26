@@ -44,7 +44,6 @@ func Run(ctx context.Context, opts Options) error {
 	rootModel := root.New(store, root.Options{
 		Theme:    palette,
 		KeyMap:   &km,
-		Firewall: daemonSrv,
 		Rules:    daemonSrv,
 	})
 

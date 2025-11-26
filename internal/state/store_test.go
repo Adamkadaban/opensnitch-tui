@@ -136,27 +136,6 @@ func TestStoreAddAlert(t *testing.T) {
 	}
 }
 
-func TestStoreSetFirewallCopiesData(t *testing.T) {
-	store := NewStore()
-	fw := Firewall{
-		Enabled: true,
-		Version: 2,
-		Chains: []FirewallChain{{
-			Table: "filter",
-			Name:  "output",
-			Rules: []FirewallRule{{UUID: "1", Description: "allow", Target: "accept"}},
-		}},
-	}
-	store.SetFirewall("node-1", fw)
-
-	snap := store.Snapshot()
-	snap.Firewalls["node-1"].Chains[0].Rules[0].Description = "mutated"
-
-	if store.snapshot.Firewalls["node-1"].Chains[0].Rules[0].Description != "allow" {
-		t.Fatalf("expected internal firewall state to be isolated from snapshot mutation")
-	}
-}
-
 func TestStoreSetRulesCopiesData(t *testing.T) {
 	store := NewStore()
 	rules := []Rule{{
