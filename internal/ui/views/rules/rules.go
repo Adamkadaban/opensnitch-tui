@@ -50,6 +50,8 @@ var (
 	zebraDarkOdd   = lipgloss.Color("#111624")
 	zebraLightEven = lipgloss.Color("#ffffff")
 	zebraLightOdd  = lipgloss.Color("#eef2f7")
+	selectedDark   = lipgloss.Color("#2d3b52")
+	selectedLight  = lipgloss.Color("#cfe0ff")
 )
 
 type tableLayout struct {
@@ -191,6 +193,9 @@ func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
 
 func (m *Model) renderRuleRow(layout tableLayout, rule state.Rule, rowIdx int, selected bool, gap string) string {
 	bg := m.rowStripeColor(rowIdx)
+	if selected {
+		bg = m.selectedRowColor()
+	}
 	cursor := " "
 	if selected {
 		cursor = ">"
@@ -568,6 +573,13 @@ func (m *Model) rowStripeColor(rowIdx int) lipgloss.Color {
 		}
 	}
 	return color
+}
+
+func (m *Model) selectedRowColor() lipgloss.Color {
+	if m.theme.Mode == theme.ModeLight {
+		return selectedLight
+	}
+	return selectedDark
 }
 
 func colorRuleAction(th theme.Theme, action string) string {
