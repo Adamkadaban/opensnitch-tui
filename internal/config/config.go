@@ -22,6 +22,7 @@ type Config struct {
 	DefaultPromptAction   string `yaml:"default_prompt_action"`
 	DefaultPromptDuration string `yaml:"default_prompt_duration"`
 	DefaultPromptTarget   string `yaml:"default_prompt_target"`
+	AlertsInterrupt       bool   `yaml:"alerts_interrupt"`
 	Nodes                 []Node `yaml:"nodes"`
 }
 
@@ -68,6 +69,7 @@ func Default() Config {
 		DefaultPromptAction:   DefaultPromptAction,
 		DefaultPromptDuration: DefaultPromptDuration,
 		DefaultPromptTarget:   DefaultPromptTarget,
+		AlertsInterrupt:       DefaultAlertsInterrupt,
 		Nodes:                 []Node{},
 	}
 }
@@ -92,6 +94,7 @@ func resolvePath(path string) (string, error) {
 const DefaultPromptAction = "deny"
 const DefaultPromptDuration = "once"
 const DefaultPromptTarget = "process.path"
+const DefaultAlertsInterrupt = true
 
 // NormalizePromptAction ensures stored prompts actions stay within supported values.
 func NormalizePromptAction(action string) string {

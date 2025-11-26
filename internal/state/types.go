@@ -98,6 +98,7 @@ type Settings struct {
 	DefaultPromptAction   string
 	DefaultPromptDuration string
 	DefaultPromptTarget   string
+	AlertsInterrupt       bool
 }
 
 // Connection stores the details of an outbound connection awaiting operator input.

@@ -87,11 +87,16 @@ func (m *Model) SetSize(width, height int) {
 
 func (m *Model) Active() bool {
 	snapshot := m.store.Snapshot()
-	return len(snapshot.Prompts) > 0
+	return m.shouldDisplayPrompts(snapshot)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
-	prompt, targets, form, ok := m.promptState()
+	snapshot := m.store.Snapshot()
+	if !m.shouldDisplayPrompts(snapshot) {
+		m.syncForms(snapshot.Prompts)
+		return nil, false
+	}
+	prompt, targets, form, ok := m.promptStateFromSnapshot(snapshot)
 	if !ok {
 		return nil, false
 	}
@@ -148,7 +153,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 }
 
 func (m *Model) View() string {
-	prompt, targets, form, ok := m.promptState()
+	snapshot := m.store.Snapshot()
+	if !m.shouldDisplayPrompts(snapshot) {
+		return ""
+	}
+	prompt, targets, form, ok := m.promptStateFromSnapshot(snapshot)
 	if !ok {
 		return ""
 	}
@@ -195,6 +204,10 @@ func (m *Model) View() string {
 
 func (m *Model) promptState() (state.Prompt, []targetOption, *formState, bool) {
 	snapshot := m.store.Snapshot()
+	return m.promptStateFromSnapshot(snapshot)
+}
+
+func (m *Model) promptStateFromSnapshot(snapshot state.Snapshot) (state.Prompt, []targetOption, *formState, bool) {
 	m.syncForms(snapshot.Prompts)
 	if len(snapshot.Prompts) == 0 {
 		return state.Prompt{}, nil, nil, false
@@ -401,6 +414,16 @@ func (m *Model) defaultTargetIndex(targets []targetOption) int {
 		}
 	}
 	return 0
+}
+
+func (m *Model) shouldDisplayPrompts(snapshot state.Snapshot) bool {
+	if len(snapshot.Prompts) == 0 {
+		return false
+	}
+	if snapshot.Settings.AlertsInterrupt {
+		return true
+	}
+	return snapshot.ActiveView == state.ViewAlerts
 }
 
 func fallback(value, def string) string {

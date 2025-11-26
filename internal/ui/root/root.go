@@ -199,6 +199,10 @@ func (m *Model) footerLine(snapshot state.Snapshot) string {
 	if snapshot.LastError != "" {
 		line = fmt.Sprintf("%s · %s", line, m.theme.Danger.Render(snapshot.LastError))
 	}
+	if !snapshot.Settings.AlertsInterrupt && len(snapshot.Prompts) > 0 && snapshot.ActiveView != state.ViewAlerts {
+		indicator := m.theme.Danger.Render("● alerts pending")
+		line = fmt.Sprintf("%s · %s", line, indicator)
+	}
 	return line
 }
 

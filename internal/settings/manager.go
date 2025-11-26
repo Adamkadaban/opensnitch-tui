@@ -57,6 +57,18 @@ func (m *Manager) SetDefaultPromptTarget(target string) (string, error) {
 	return normalized, nil
 }
 
+// SetAlertsInterrupt toggles whether alerts interrupt active work.
+func (m *Manager) SetAlertsInterrupt(enabled bool) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.AlertsInterrupt = enabled
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return m.cfg.AlertsInterrupt, err
+	}
+	return m.cfg.AlertsInterrupt, nil
+}
+
 // Config returns a copy of the managed config.
 func (m *Manager) Config() config.Config {
 	m.mu.Lock()

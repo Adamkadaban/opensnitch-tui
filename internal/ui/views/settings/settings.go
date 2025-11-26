@@ -22,11 +22,12 @@ type Model struct {
 	width  int
 	height int
 
-	focus       field
-	actionIdx   int
-	durationIdx int
-	targetIdx   int
-	status      string
+	focus           field
+	actionIdx       int
+	durationIdx     int
+	targetIdx       int
+	alertsInterrupt bool
+	status          string
 }
 
 type field int
@@ -35,7 +36,10 @@ const (
 	fieldAction field = iota
 	fieldDuration
 	fieldTarget
+	fieldAlertsInterrupt
 )
+
+const settingsFieldCount = 4
 
 type option struct {
 	label string
@@ -85,11 +89,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch key.String() {
 		case "tab", "down", "j":
-			m.focus = (m.focus + 1) % 3
+			m.focus = (m.focus + 1) % settingsFieldCount
 		case "shift+tab", "up", "k":
 			m.focus--
 			if m.focus < 0 {
-				m.focus = fieldTarget
+				m.focus = settingsFieldCount - 1
 			}
 		case "left", "h":
 			m.shiftSelection(-1)
@@ -106,10 +110,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
-	body := []string{
+	general := []string{
 		m.renderRow("Default action", promptActions, m.actionIdx, m.focus == fieldAction),
 		m.renderRow("Default duration", promptDurations, m.durationIdx, m.focus == fieldDuration),
 		m.renderRow("Default target", promptTargets, m.targetIdx, m.focus == fieldTarget),
+	}
+	alerts := []string{
+		m.renderToggle("Alerts interrupt", m.alertsInterrupt, m.focus == fieldAlertsInterrupt),
+	}
+
+	body := []string{
+		m.renderSection("General", general),
+		m.renderSection("Alerts", alerts),
 		m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter save all · s save focused"),
 	}
 	if m.status != "" {
@@ -125,6 +137,7 @@ func (m *Model) syncSelection() {
 	m.actionIdx = optionIndex(promptActions, snapshot.Settings.DefaultPromptAction)
 	m.durationIdx = optionIndex(promptDurations, snapshot.Settings.DefaultPromptDuration)
 	m.targetIdx = optionIndex(promptTargets, snapshot.Settings.DefaultPromptTarget)
+	m.alertsInterrupt = snapshot.Settings.AlertsInterrupt
 }
 
 func (m *Model) persistFocused() {
@@ -139,6 +152,8 @@ func (m *Model) persistFocused() {
 		m.persistDuration()
 	case fieldTarget:
 		m.persistTarget()
+	case fieldAlertsInterrupt:
+		m.persistAlertsInterrupt()
 	}
 }
 
@@ -159,7 +174,11 @@ func (m *Model) persistAll() {
 		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
 		return
 	}
-	m.status = m.theme.Success.Render("Prompt defaults saved")
+	if _, err := m.saveAlertsInterrupt(m.alertsInterrupt); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save alerts setting: %v", err))
+		return
+	}
+	m.status = m.theme.Success.Render("Settings saved")
 }
 
 func (m *Model) contentWidth() int {
@@ -195,6 +214,13 @@ func (m *Model) shiftSelection(delta int) {
 		m.durationIdx = wrap(m.durationIdx+delta, len(promptDurations))
 	case fieldTarget:
 		m.targetIdx = wrap(m.targetIdx+delta, len(promptTargets))
+	case fieldAlertsInterrupt:
+		current := 0
+		if m.alertsInterrupt {
+			current = 1
+		}
+		current = wrap(current+delta, 2)
+		m.alertsInterrupt = current == 1
 	}
 }
 
@@ -219,6 +245,16 @@ func (m *Model) persistTarget() {
 		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
 	} else {
 		m.status = m.theme.Success.Render(fmt.Sprintf("Default target set to %s", value))
+	}
+}
+
+func (m *Model) persistAlertsInterrupt() {
+	if enabled, err := m.saveAlertsInterrupt(m.alertsInterrupt); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save alerts setting: %v", err))
+	} else if enabled {
+		m.status = m.theme.Success.Render("Alerts will interrupt")
+	} else {
+		m.status = m.theme.Success.Render("Alerts stay in alerts tab")
 	}
 }
 
@@ -261,6 +297,18 @@ func (m *Model) saveTarget() (string, error) {
 	return value, nil
 }
 
+func (m *Model) saveAlertsInterrupt(enabled bool) (bool, error) {
+	value, err := m.controller.SetAlertsInterrupt(enabled)
+	if err != nil {
+		return false, err
+	}
+	m.alertsInterrupt = value
+	m.updateSettings(func(settings *state.Settings) {
+		settings.AlertsInterrupt = value
+	})
+	return value, nil
+}
+
 func (m *Model) updateSettings(mut func(*state.Settings)) {
 	if mut == nil {
 		return
@@ -268,6 +316,24 @@ func (m *Model) updateSettings(mut func(*state.Settings)) {
 	settings := m.store.Snapshot().Settings
 	mut(&settings)
 	m.store.SetSettings(settings)
+}
+
+func (m *Model) renderSection(title string, rows []string) string {
+	content := strings.Join(rows, "\n")
+	head := m.theme.Title.Render(title)
+	return fmt.Sprintf("%s\n%s", head, content)
+}
+
+func (m *Model) renderToggle(label string, enabled bool, focused bool) string {
+	options := []option{
+		{label: "Off", value: "off"},
+		{label: "On", value: "on"},
+	}
+	idx := 0
+	if enabled {
+		idx = 1
+	}
+	return m.renderRow(label, options, idx, focused)
 }
 
 func (m *Model) renderRow(label string, opts []option, selected int, focused bool) string {
