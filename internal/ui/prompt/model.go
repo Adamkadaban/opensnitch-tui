@@ -333,15 +333,17 @@ func (m *Model) renderChoices(label string, options []string, selected int, focu
 	cells := make([]string, len(options))
 	for idx, option := range options {
 		style := m.theme.TabInactive
+		marker := " "
 		if idx == selected {
 			style = m.theme.TabActive
 			if focused {
-				style = style.Underline(true)
+				style = style.Underline(true).Bold(true)
+				marker = m.theme.Warning.Render(">")
 			}
 		} else if focused {
 			style = style.Faint(true)
 		}
-		cells[idx] = style.Render(option)
+		cells[idx] = fmt.Sprintf("%s%s", marker, style.Render(option))
 	}
 	return fmt.Sprintf("%s %s", m.theme.Header.Render(label+":"), strings.Join(cells, " "))
 }
