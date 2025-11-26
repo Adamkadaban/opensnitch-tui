@@ -71,8 +71,9 @@ type promptResponse struct {
 	err  error
 }
 
+var promptTimeout = 30 * time.Second
+
 const (
-	promptTimeout  = 30 * time.Second
 	ruleTypeSimple = "simple"
 )
 
@@ -249,6 +250,10 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 		s.store.SetError(fmt.Sprintf("prompt timed out for %s", displayConnectionLabel(prompt.Connection)))
 		decision := s.defaultPromptDecision(prompt)
 		rule, err := buildRuleFromDecision(prompt, decision)
+		if err == nil {
+			stateRule := convertRule(rule, prompt.NodeID)
+			s.store.AddRule(prompt.NodeID, stateRule)
+		}
 		return rule, err
 	case <-ctx.Done():
 		s.store.RemovePrompt(req.id)

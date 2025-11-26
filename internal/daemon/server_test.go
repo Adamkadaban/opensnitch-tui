@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
@@ -165,6 +166,44 @@ func TestServerResolvePromptAddsRule(t *testing.T) {
 	}
 	if store.Snapshot().Stats.Rules != 1 {
 		t.Fatalf("expected stats count to update, got %d", store.Snapshot().Stats.Rules)
+	}
+}
+
+func TestServerAskRuleTimeoutAddsRule(t *testing.T) {
+	store := state.NewStore()
+	nodeAddr := "1.2.3.4:6000"
+	nodeID := "tcp://" + nodeAddr
+	store.SetStats(state.Stats{NodeID: nodeID})
+	srv := New(store, Options{})
+	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &testAddr{network: "tcp", value: nodeAddr}})
+
+	prevTimeout := promptTimeout
+	promptTimeout = 10 * time.Millisecond
+	defer func() { promptTimeout = prevTimeout }()
+
+	conn := &pb.Connection{
+		ProcessPath: "/usr/bin/curl",
+		DstHost:     "example.com",
+		DstPort:     443,
+	}
+	resp, err := srv.AskRule(ctx, conn)
+	if err != nil {
+		t.Fatalf("AskRule returned error: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("expected AskRule to return a rule after timeout")
+	}
+
+	snap := store.Snapshot()
+	rules := snap.Rules[nodeID]
+	if len(rules) != 1 {
+		t.Fatalf("expected rule stored for node, got %d", len(rules))
+	}
+	if rules[0].Operator.Operand != operandProcessPath || rules[0].Operator.Data != "/usr/bin/curl" {
+		t.Fatalf("expected rule to target process path, got %+v", rules[0].Operator)
+	}
+	if snap.Stats.Rules != 1 {
+		t.Fatalf("expected stats to reflect new rule, got %d", snap.Stats.Rules)
 	}
 }
 
