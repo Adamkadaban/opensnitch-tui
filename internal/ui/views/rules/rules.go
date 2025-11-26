@@ -170,6 +170,7 @@ func (m *Model) renderRulesTable(rules []state.Rule) string {
 		start = max(0, len(rules)-cap)
 	}
 	end := min(len(rules), start+cap)
+	moreBelow := end < len(rules)
 	gap := strings.Repeat(" ", columnGap)
 	rows := make([]string, 0, (end-start)+1)
 	rows = append(rows, m.renderTableHeader(layout, gap))
@@ -177,7 +178,28 @@ func (m *Model) renderRulesTable(rules []state.Rule) string {
 		rule := rules[idx]
 		rows = append(rows, m.renderRuleRow(layout, rule, idx, idx == m.ruleIdx, gap))
 	}
+	if moreBelow {
+		tableWidth := layout.total() + columnGap*(layout.count()-1)
+		rows = append(rows, renderCaretRow(tableWidth, m.theme.Subtle))
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+func renderCaretRow(width int, style lipgloss.Style) string {
+	if width <= 0 {
+		width = 3
+	}
+	glyphs := make([]rune, width)
+	for i := range glyphs {
+		glyphs[i] = ' '
+	}
+	positions := []int{0, width / 2, max(0, width-1)}
+	for _, pos := range positions {
+		if pos >= 0 && pos < width {
+			glyphs[pos] = 'v'
+		}
+	}
+	return style.Copy().Render(string(glyphs))
 }
 
 func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
