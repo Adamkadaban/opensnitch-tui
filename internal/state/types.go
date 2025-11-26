@@ -47,17 +47,26 @@ type Node struct {
 
 // Stats aggregates daemon telemetry snapshots rendered in the dashboard.
 type Stats struct {
-	NodeID        string
-	NodeName      string
-	DaemonVersion string
-	Rules         uint64
-	Connections   uint64
-	Accepted      uint64
-	Dropped       uint64
-	Ignored       uint64
-	RuleHits      uint64
-	RuleMisses    uint64
-	UpdatedAt     time.Time
+	NodeID         string
+	NodeName       string
+	DaemonVersion  string
+	Rules          uint64
+	Connections    uint64
+	Accepted       uint64
+	Dropped        uint64
+	Ignored        uint64
+	RuleHits       uint64
+	RuleMisses     uint64
+	TopDestHosts   []StatBucket
+	TopDestPorts   []StatBucket
+	TopExecutables []StatBucket
+	UpdatedAt      time.Time
+}
+
+// StatBucket captures a label/value pair for breakdown charts.
+type StatBucket struct {
+	Label string
+	Value uint64
 }
 
 // Alert represents a daemon alert entry shown in the UI.

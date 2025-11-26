@@ -53,6 +53,7 @@ func (s *Store) Snapshot() Snapshot {
 	copySnap.Alerts = cloneAlerts(s.snapshot.Alerts)
 	copySnap.Rules = cloneRulesMap(s.snapshot.Rules)
 	copySnap.Settings = s.snapshot.Settings
+	copySnap.Stats = cloneStats(s.snapshot.Stats)
 	copySnap.Prompts = clonePrompts(s.snapshot.Prompts)
 	return copySnap
 }
@@ -141,7 +142,7 @@ func (s *Store) SetStats(stats Stats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.snapshot.Stats = stats
+	s.snapshot.Stats = cloneStats(stats)
 	s.notifyLocked()
 }
 
@@ -368,6 +369,22 @@ func clonePrompts(prompts []Prompt) []Prompt {
 		copyPrompts[i] = clonePrompt(prompt)
 	}
 	return copyPrompts
+}
+
+func cloneStats(stats Stats) Stats {
+	stats.TopDestHosts = cloneBuckets(stats.TopDestHosts)
+	stats.TopDestPorts = cloneBuckets(stats.TopDestPorts)
+	stats.TopExecutables = cloneBuckets(stats.TopExecutables)
+	return stats
+}
+
+func cloneBuckets(buckets []StatBucket) []StatBucket {
+	if len(buckets) == 0 {
+		return nil
+	}
+	copyBuckets := make([]StatBucket, len(buckets))
+	copy(copyBuckets, buckets)
+	return copyBuckets
 }
 
 func cloneRuleSlice(list []Rule) []Rule {

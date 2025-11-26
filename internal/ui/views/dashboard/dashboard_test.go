@@ -15,7 +15,7 @@ func TestDashboardViewWaitingSnapshot(t *testing.T) {
 
 	th := theme.New(theme.Options{})
 	m := New(store, th)
-	m.SetSize(80, 12)
+	m.SetSize(120, 18)
 
 	viewtest.AssertSnapshot(t, m.View(), filepath.Join("testdata", "dashboard_waiting.snap"))
 }

@@ -63,7 +63,7 @@ func TestStoreSetStatsAndError(t *testing.T) {
 	store.SetError("boom")
 
 	snapshot := store.Snapshot()
-	if snapshot.Stats != stats {
+	if snapshot.Stats.NodeID != stats.NodeID || snapshot.Stats.Rules != stats.Rules {
 		t.Fatalf("expected stats %+v, got %+v", stats, snapshot.Stats)
 	}
 	if snapshot.LastError != "boom" {

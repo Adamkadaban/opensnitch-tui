@@ -34,6 +34,18 @@ func TestConvertStatsPopulated(t *testing.T) {
 		Ignored:       5,
 		RuleHits:      88,
 		RuleMisses:    13,
+		ByHost: map[string]uint64{
+			"api.local": 10,
+			"db.local":  3,
+		},
+		ByPort: map[string]uint64{
+			"443": 40,
+			"80":  5,
+		},
+		ByExecutable: map[string]uint64{
+			"curl": 3,
+			"ssh":  7,
+		},
 	}
 
 	stats := convertStats(proto, "node-2", "backup")
@@ -55,5 +67,14 @@ func TestConvertStatsPopulated(t *testing.T) {
 	}
 	if stats.UpdatedAt.Before(start) {
 		t.Fatalf("expected UpdatedAt to be after %s, got %s", start, stats.UpdatedAt)
+	}
+	if len(stats.TopDestHosts) != 2 || stats.TopDestHosts[0].Label != "api.local" {
+		t.Fatalf("expected host buckets, got %+v", stats.TopDestHosts)
+	}
+	if len(stats.TopDestPorts) != 2 || stats.TopDestPorts[0].Label != "443" {
+		t.Fatalf("expected ports sorted, got %+v", stats.TopDestPorts)
+	}
+	if len(stats.TopExecutables) != 2 || stats.TopExecutables[0].Label != "ssh" {
+		t.Fatalf("expected executables sorted, got %+v", stats.TopExecutables)
 	}
 }
