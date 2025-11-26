@@ -45,6 +45,13 @@ const (
 	minOperatorWidth   = 14
 )
 
+var (
+	zebraDarkEven  = lipgloss.Color("#1f2a3a")
+	zebraDarkOdd   = lipgloss.Color("#111624")
+	zebraLightEven = lipgloss.Color("#ffffff")
+	zebraLightOdd  = lipgloss.Color("#eef2f7")
+)
+
 type tableLayout struct {
 	cursor     int
 	name       int
@@ -166,7 +173,7 @@ func (m *Model) renderRulesTable(rules []state.Rule) string {
 	rows = append(rows, m.renderTableHeader(layout, gap))
 	for idx := start; idx < end; idx++ {
 		rule := rules[idx]
-		rows = append(rows, m.renderRuleRow(layout, rule, idx == m.ruleIdx, gap))
+		rows = append(rows, m.renderRuleRow(layout, rule, idx, idx == m.ruleIdx, gap))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -182,19 +189,20 @@ func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
 	return strings.Join(cells, gap)
 }
 
-func (m *Model) renderRuleRow(layout tableLayout, rule state.Rule, selected bool, gap string) string {
+func (m *Model) renderRuleRow(layout tableLayout, rule state.Rule, rowIdx int, selected bool, gap string) string {
+	bg := m.rowStripeColor(rowIdx)
 	cursor := " "
 	if selected {
 		cursor = ">"
 	}
-	cursorStyle := m.theme.Body.Copy().Padding(0)
-	nameStyle := m.theme.Title.Copy().Padding(0)
-	actionStyle := m.theme.Body.Copy().Padding(0)
-	durationStyle := m.theme.Subtle.Copy().Padding(0)
-	statusEnabled := m.theme.Success.Copy().Padding(0)
-	statusDisabled := m.theme.Warning.Copy().Padding(0)
-	flagStyle := m.theme.Body.Copy().Padding(0)
-	operatorStyle := m.theme.Body.Copy().Padding(0)
+	cursorStyle := stripBackground(m.theme.Body).Background(bg).Padding(0)
+	nameStyle := stripBackground(m.theme.Title).Background(bg).Padding(0)
+	actionStyle := stripBackground(m.theme.Body).Background(bg).Padding(0)
+	durationStyle := stripBackground(m.theme.Subtle).Background(bg).Padding(0)
+	statusEnabled := stripBackground(m.theme.Success).Background(bg).Padding(0)
+	statusDisabled := stripBackground(m.theme.Warning).Background(bg).Padding(0)
+	flagStyle := stripBackground(m.theme.Body).Background(bg).Padding(0)
+	operatorStyle := stripBackground(m.theme.Body).Background(bg).Padding(0)
 	statusLabel := "disabled"
 	statusStyle := statusDisabled
 	if rule.Enabled {
@@ -211,7 +219,9 @@ func (m *Model) renderRuleRow(layout tableLayout, rule state.Rule, selected bool
 		padAndStyle(flagStyle, boolLabel(rule.NoLog), layout.noLog),
 		padAndStyle(operatorStyle, describeOperator(rule.Operator), layout.operator),
 	}
-	return strings.Join(cells, gap)
+	gapStyle := lipgloss.NewStyle().Background(bg)
+	rowGap := gapStyle.Render(gap)
+	return strings.Join(cells, rowGap)
 }
 
 func (m *Model) renderRuleDetail(rules []state.Rule) string {
@@ -535,6 +545,29 @@ func boolLabel(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func stripBackground(style lipgloss.Style) lipgloss.Style {
+	return style.Copy().UnsetBackground()
+}
+
+func (m *Model) rowStripeColor(rowIdx int) lipgloss.Color {
+	var color lipgloss.Color
+	light := m.theme.Mode == theme.ModeLight
+	if rowIdx%2 == 0 {
+		if light {
+			color = zebraLightEven
+		} else {
+			color = zebraDarkEven
+		}
+	} else {
+		if light {
+			color = zebraLightOdd
+		} else {
+			color = zebraDarkOdd
+		}
+	}
+	return color
 }
 
 func colorRuleAction(th theme.Theme, action string) string {
