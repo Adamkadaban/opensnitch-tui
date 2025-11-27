@@ -40,6 +40,7 @@ func NewStore() *Store {
 				DefaultPromptTarget:   config.DefaultPromptTarget,
 				PromptTimeout:         time.Duration(config.DefaultPromptTimeoutSeconds) * time.Second,
 				AlertsInterrupt:       config.DefaultAlertsInterrupt,
+				PausePromptOnInspect:  config.DefaultPausePromptOnInspect,
 			},
 			Prompts: []Prompt{},
 		},

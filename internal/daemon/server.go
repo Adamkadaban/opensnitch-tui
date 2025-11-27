@@ -510,7 +510,12 @@ func (s *Server) PausePrompt(promptID string) error {
 		return fmt.Errorf("prompt %s has no timer", promptID)
 	}
 	if req.remaining > 0 {
-		return nil // already paused
+		// already paused
+		s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
+			p.Paused = true
+			p.Remaining = req.remaining
+		})
+		return nil
 	}
 	if !req.timer.Stop() {
 		// timer already fired
@@ -525,6 +530,10 @@ func (s *Server) PausePrompt(promptID string) error {
 	case req.pauseCh <- struct{}{}:
 	default:
 	}
+	s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
+		p.Paused = true
+		p.Remaining = req.remaining
+	})
 	return nil
 }
 
@@ -535,12 +544,21 @@ func (s *Server) ResumePrompt(promptID string) error {
 		return fmt.Errorf("prompt %s not found", promptID)
 	}
 	if req.remaining <= 0 {
+		s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
+			p.Paused = false
+			p.Remaining = 0
+		})
 		return nil // not paused or nothing to resume
 	}
 	req.timer = time.NewTimer(req.remaining)
 	req.timerC = req.timer.C
 	req.prompt.ExpiresAt = time.Now().Add(req.remaining)
 	req.remaining = 0
+	s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
+		p.Paused = false
+		p.Remaining = 0
+		p.ExpiresAt = req.prompt.ExpiresAt
+	})
 	select {
 	case req.resumeCh <- struct{}{}:
 	default:

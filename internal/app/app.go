@@ -56,6 +56,7 @@ func Run(ctx context.Context, opts Options) error {
 		DefaultPromptTarget:   cfg.DefaultPromptTarget,
 		PromptTimeout:         time.Duration(cfg.PromptTimeoutSeconds) * time.Second,
 		AlertsInterrupt:       cfg.AlertsInterrupt,
+		PausePromptOnInspect:  cfg.PausePromptOnInspect,
 	})
 
 	km := keymap.DefaultGlobal()

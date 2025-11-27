@@ -169,6 +169,58 @@ func TestServerResolvePromptAddsRule(t *testing.T) {
 	}
 }
 
+func TestPauseResumePromptUpdatesStore(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	promptID := "prompt-1"
+	expires := time.Now().Add(30 * time.Second)
+	req := &promptRequest{
+		id: promptID,
+		prompt: state.Prompt{
+			ID:        promptID,
+			NodeID:    "node-1",
+			ExpiresAt: expires,
+		},
+		response: make(chan promptResponse, 1),
+		pauseCh:  make(chan struct{}, 1),
+		resumeCh: make(chan struct{}, 1),
+	}
+	req.timer = time.NewTimer(5 * time.Second)
+	req.timerC = req.timer.C
+	srv.registerPrompt(req)
+	store.AddPrompt(req.prompt)
+
+	if err := srv.PausePrompt(promptID); err != nil {
+		t.Fatalf("PausePrompt error: %v", err)
+	}
+	snap := store.Snapshot()
+	if len(snap.Prompts) != 1 {
+		t.Fatalf("expected one prompt in store, got %d", len(snap.Prompts))
+	}
+	pausedPrompt := snap.Prompts[0]
+	if !pausedPrompt.Paused {
+		t.Fatalf("expected prompt to be marked paused")
+	}
+	if pausedPrompt.Remaining <= 0 {
+		t.Fatalf("expected remaining duration to be >0, got %v", pausedPrompt.Remaining)
+	}
+
+	if err := srv.ResumePrompt(promptID); err != nil {
+		t.Fatalf("ResumePrompt error: %v", err)
+	}
+	snap = store.Snapshot()
+	resumed := snap.Prompts[0]
+	if resumed.Paused {
+		t.Fatalf("expected prompt to be unpaused after resume")
+	}
+	if resumed.Remaining != 0 {
+		t.Fatalf("expected remaining 0 after resume, got %v", resumed.Remaining)
+	}
+	if resumed.ExpiresAt.Before(time.Now()) {
+		t.Fatalf("expected ExpiresAt to be in the future after resume")
+	}
+}
+
 func TestServerAskRuleTimeoutAddsRule(t *testing.T) {
 	store := state.NewStore()
 	nodeAddr := "1.2.3.4:6000"

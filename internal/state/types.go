@@ -110,6 +110,7 @@ type Settings struct {
 	DefaultPromptTarget   string
 	PromptTimeout         time.Duration
 	AlertsInterrupt       bool
+	PausePromptOnInspect  bool
 }
 
 // Connection stores the details of an outbound connection awaiting operator input.
@@ -136,6 +137,8 @@ type Prompt struct {
 	Connection  Connection
 	RequestedAt time.Time
 	ExpiresAt   time.Time
+	Paused      bool
+	Remaining   time.Duration
 }
 
 // Snapshot is a threadsafe copy of the application's state tree.

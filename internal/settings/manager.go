@@ -97,6 +97,18 @@ func (m *Manager) SetPromptTimeout(seconds int) (int, error) {
 	return normalized, nil
 }
 
+// SetPausePromptOnInspect toggles whether to pause prompt timeout while inspecting.
+func (m *Manager) SetPausePromptOnInspect(enabled bool) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.PausePromptOnInspect = enabled
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return m.cfg.PausePromptOnInspect, err
+	}
+	return m.cfg.PausePromptOnInspect, nil
+}
+
 // Config returns a copy of the managed config.
 func (m *Manager) Config() config.Config {
 	m.mu.Lock()

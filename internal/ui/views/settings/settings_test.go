@@ -31,6 +31,9 @@ func (f *fakeSettingsController) SetDefaultPromptTarget(target string) (string, 
 }
 func (f *fakeSettingsController) SetAlertsInterrupt(enabled bool) (bool, error) { return enabled, nil }
 func (f *fakeSettingsController) SetPromptTimeout(seconds int) (int, error)     { return seconds, nil }
+func (f *fakeSettingsController) SetPausePromptOnInspect(enabled bool) (bool, error) {
+	return enabled, nil
+}
 
 func TestSettingsViewRenderContainsFields(t *testing.T) {
 	store := state.NewStore()
@@ -39,7 +42,7 @@ func TestSettingsViewRenderContainsFields(t *testing.T) {
 	m.SetSize(80, 20)
 
 	out := m.View()
-	checks := []string{"Theme", "Default action", "Default duration", "Default target", "Prompt timeout", "Alerts interrupt"}
+	checks := []string{"Theme", "Default action", "Default duration", "Default target", "Prompt timeout", "Alerts interrupt", "Pause alert timeout on inspect"}
 	for _, c := range checks {
 		if !strings.Contains(out, c) {
 			t.Fatalf("expected view to contain %q, got: %s", c, out)

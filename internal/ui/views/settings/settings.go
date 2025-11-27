@@ -32,6 +32,7 @@ type Model struct {
 	targetIdx       int
 	timeoutIdx      int
 	alertsInterrupt bool
+	pauseOnInspect  bool
 	status          string
 }
 
@@ -44,9 +45,10 @@ const (
 	fieldTarget
 	fieldPromptTimeout
 	fieldAlertsInterrupt
+	fieldPauseOnInspect
 )
 
-const settingsFieldCount = 6
+const settingsFieldCount = 7
 
 type option struct {
 	label string
@@ -140,6 +142,7 @@ func (m *Model) View() string {
 	}
 	alerts := []string{
 		m.renderToggle("Alerts interrupt", m.alertsInterrupt, m.focus == fieldAlertsInterrupt),
+		m.renderToggle("Pause alert timeout on inspect", m.pauseOnInspect, m.focus == fieldPauseOnInspect),
 	}
 
 	body := []string{
@@ -167,6 +170,7 @@ func (m *Model) syncSelection() {
 	}
 	m.timeoutIdx = optionIndex(promptTimeouts, fmt.Sprintf("%d", timeoutSeconds))
 	m.alertsInterrupt = snapshot.Settings.AlertsInterrupt
+	m.pauseOnInspect = snapshot.Settings.PausePromptOnInspect
 }
 
 func (m *Model) persistFocused() {
@@ -187,6 +191,8 @@ func (m *Model) persistFocused() {
 		m.persistPromptTimeout()
 	case fieldAlertsInterrupt:
 		m.persistAlertsInterrupt()
+	case fieldPauseOnInspect:
+		m.persistPauseOnInspect()
 	}
 }
 
@@ -217,6 +223,10 @@ func (m *Model) persistAll() {
 	}
 	if _, err := m.saveAlertsInterrupt(m.alertsInterrupt); err != nil {
 		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save alerts setting: %v", err))
+		return
+	}
+	if _, err := m.savePauseOnInspect(m.pauseOnInspect); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save pause-on-inspect: %v", err))
 		return
 	}
 	m.status = m.theme.Success.Render("Settings saved")
@@ -258,6 +268,13 @@ func (m *Model) shiftSelection(delta int) {
 		}
 		current = util.WrapIndex(current, delta, 2)
 		m.alertsInterrupt = current == 1
+	case fieldPauseOnInspect:
+		current := 0
+		if m.pauseOnInspect {
+			current = 1
+		}
+		current = util.WrapIndex(current, delta, 2)
+		m.pauseOnInspect = current == 1
 	}
 }
 
@@ -300,6 +317,16 @@ func (m *Model) persistAlertsInterrupt() {
 		m.status = m.theme.Success.Render("Alerts will interrupt")
 	} else {
 		m.status = m.theme.Success.Render("Alerts stay in alerts tab")
+	}
+}
+
+func (m *Model) persistPauseOnInspect() {
+	if enabled, err := m.savePauseOnInspect(m.pauseOnInspect); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save pause-on-inspect: %v", err))
+	} else if enabled {
+		m.status = m.theme.Success.Render("Inspect will pause timeouts")
+	} else {
+		m.status = m.theme.Success.Render("Inspect won’t pause timeouts")
 	}
 }
 
@@ -376,6 +403,18 @@ func (m *Model) saveAlertsInterrupt(enabled bool) (bool, error) {
 	m.alertsInterrupt = value
 	m.updateSettings(func(settings *state.Settings) {
 		settings.AlertsInterrupt = value
+	})
+	return value, nil
+}
+
+func (m *Model) savePauseOnInspect(enabled bool) (bool, error) {
+	value, err := m.controller.SetPausePromptOnInspect(enabled)
+	if err != nil {
+		return false, err
+	}
+	m.pauseOnInspect = value
+	m.updateSettings(func(settings *state.Settings) {
+		settings.PausePromptOnInspect = value
 	})
 	return value, nil
 }

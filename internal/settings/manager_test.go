@@ -88,4 +88,20 @@ func TestManagerSettersPersistNormalizedValues(t *testing.T) {
 	if persisted.PromptTimeoutSeconds != config.DefaultPromptTimeoutSeconds {
 		t.Fatalf("expected persisted prompt timeout %d, got %d", config.DefaultPromptTimeoutSeconds, persisted.PromptTimeoutSeconds)
 	}
+
+	pauseOnInspect, err := mgr.SetPausePromptOnInspect(false)
+	if err != nil {
+		t.Fatalf("SetPausePromptOnInspect error: %v", err)
+	}
+	if pauseOnInspect != false {
+		t.Fatalf("expected pauseOnInspect false")
+	}
+
+	persisted2, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if persisted2.PausePromptOnInspect != false {
+		t.Fatalf("expected persisted PausePromptOnInspect false, got %v", persisted2.PausePromptOnInspect)
+	}
 }

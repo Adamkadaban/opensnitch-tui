@@ -49,7 +49,8 @@ func (m *Model) toggleInspect(prompt state.Prompt) {
 		return
 	}
 	// enter inspect
-	if m.controller != nil {
+	pauseOnInspect := m.store.Snapshot().Settings.PausePromptOnInspect
+	if pauseOnInspect && m.controller != nil {
 		if err := m.controller.PausePrompt(prompt.ID); err == nil {
 			m.paused = true
 		} else {
@@ -281,16 +282,23 @@ func (m *Model) View() string {
 	}
 
 	if m.inspect {
+		pauseOnInspect := snapshot.Settings.PausePromptOnInspect
 		cardW, innerW, innerH := m.computeInspectDimensions()
 		if m.inspectVP.Width != innerW || m.inspectVP.Height != innerH {
 			m.inspectVP.Width = innerW
 			m.inspectVP.Height = innerH
 			m.updateInspectContent()
 		}
+		statusLine := "[esc/i] back · scroll ↑/↓ ←/→"
+		if pauseOnInspect {
+			statusLine += " · countdown paused"
+		} else {
+			statusLine += " · countdown running"
+		}
 		body := lipgloss.JoinVertical(lipgloss.Left,
 			m.theme.Header.Render("Process inspection"),
 			m.inspectVP.View(),
-			m.theme.Subtle.Render("[esc/i] back · scroll ↑/↓ ←/→ · countdown paused"),
+			m.theme.Subtle.Render(statusLine),
 		)
 		card := m.theme.Card.Width(cardW)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, card.Render(body))
@@ -323,12 +331,20 @@ func (m *Model) View() string {
 		expiresAt = prompt.RequestedAt.Add(timeout)
 	}
 	status := m.status
-	if status == "" && !expiresAt.IsZero() {
-		remaining := time.Until(expiresAt)
-		if remaining < 0 {
-			remaining = 0
+	if status == "" {
+		if prompt.Paused {
+			remaining := prompt.Remaining
+			if remaining < 0 {
+				remaining = 0
+			}
+			status = fmt.Sprintf("Timeout paused (%s left)", remaining.Round(time.Second))
+		} else if !expiresAt.IsZero() {
+			remaining := time.Until(expiresAt)
+			if remaining < 0 {
+				remaining = 0
+			}
+			status = fmt.Sprintf("Timeout in %s", remaining.Round(time.Second))
 		}
-		status = fmt.Sprintf("Timeout in %s", remaining.Round(time.Second))
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,

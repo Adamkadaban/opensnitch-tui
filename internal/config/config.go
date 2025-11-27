@@ -30,6 +30,7 @@ type Config struct {
 	DefaultPromptTarget   string `yaml:"default_prompt_target"`
 	PromptTimeoutSeconds  int    `yaml:"prompt_timeout_seconds"`
 	AlertsInterrupt       bool   `yaml:"alerts_interrupt"`
+	PausePromptOnInspect  bool   `yaml:"pause_prompt_on_inspect"`
 	Nodes                 []Node `yaml:"nodes"`
 }
 
@@ -78,6 +79,7 @@ func Default() Config {
 		DefaultPromptTarget:   DefaultPromptTarget,
 		PromptTimeoutSeconds:  DefaultPromptTimeoutSeconds,
 		AlertsInterrupt:       DefaultAlertsInterrupt,
+		PausePromptOnInspect:  DefaultPausePromptOnInspect,
 		Nodes:                 []Node{},
 	}
 }
@@ -104,6 +106,7 @@ const DefaultPromptDuration = "once"
 const DefaultPromptTarget = "process.path"
 const DefaultPromptTimeoutSeconds = 30
 const DefaultAlertsInterrupt = true
+const DefaultPausePromptOnInspect = true
 
 // NormalizePromptAction ensures stored prompts actions stay within supported values.
 func NormalizePromptAction(action string) string {
