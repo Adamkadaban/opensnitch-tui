@@ -272,6 +272,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			case "i", "esc":
 				cmd := m.toggleInspect(prompt, snapshot.Settings)
 				return cmd, true
+			case "tab", "shift+tab":
+				// let global tab navigation (view switching) work while inspecting
+				return nil, false
 			case "up", "k", "ctrl+b", "pgup":
 				m.inspectVP.LineUp(1)
 				return nil, true
