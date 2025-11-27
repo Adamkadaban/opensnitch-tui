@@ -77,7 +77,7 @@ const (
 	yaraStatusTimeout
 )
 
-func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.Cmd {
+func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings, local bool) tea.Cmd {
 	if m.inspect {
 		// resume
 		if m.controller != nil && m.paused {
@@ -109,6 +109,15 @@ func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.
 		}
 	}
 	m.inspectRoot = root
+	if !local {
+		msg := "Process details available only for local nodes"
+		m.inspectInfo = processInspect{Lines: []string{msg}, MaxWidth: len(msg)}
+		m.resetInspectViewport()
+		m.setYaraStatus("YARA: unavailable for remote nodes", yaraStatusNotAvailable)
+		m.inspect = true
+		return nil
+	}
+
 	m.inspectInfo = buildProcessInspect(prompt.Connection, m.highlightPath)
 	m.resetInspectViewport()
 	m.setYaraStatus("", yaraStatusUnknown)
@@ -314,7 +323,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			// handle inspect UI scrolling
 			switch key.String() {
 			case "i", "esc":
-				cmd := m.toggleInspect(prompt, snapshot.Settings)
+				local := isLocalNode(snapshot.Nodes, prompt.NodeID)
+				cmd := m.toggleInspect(prompt, snapshot.Settings, local)
 				return cmd, true
 			case "tab", "shift+tab":
 				// let global tab navigation (view switching) work while inspecting
@@ -342,7 +352,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		switch key.String() {
 		case "i":
-			cmd := m.toggleInspect(prompt, snapshot.Settings)
+			local := isLocalNode(snapshot.Nodes, prompt.NodeID)
+			cmd := m.toggleInspect(prompt, snapshot.Settings, local)
 			return cmd, true
 		case "down", "j":
 			m.focus = (m.focus + 1) % 3
@@ -376,7 +387,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		case "enter", "esc":
 			if m.inspect {
-				cmd := m.toggleInspect(prompt, snapshot.Settings)
+				local := isLocalNode(snapshot.Nodes, prompt.NodeID)
+				cmd := m.toggleInspect(prompt, snapshot.Settings, local)
 				return cmd, true
 			}
 			m.submit(prompt, targets, form)

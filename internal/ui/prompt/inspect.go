@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -13,6 +14,41 @@ import (
 )
 
 type PathHighlighter func(string) string
+
+func isLocalNode(nodes []state.Node, nodeID string) bool {
+	if nodeID == "" {
+		return true
+	}
+	// If the nodeID itself looks like an address (peerKey style), evaluate directly.
+	if isLocalAddress(nodeID) {
+		return true
+	}
+	for _, n := range nodes {
+		if n.ID == nodeID {
+			return isLocalAddress(n.Address)
+		}
+	}
+	return false
+}
+
+func isLocalAddress(addr string) bool {
+	if addr == "" {
+		return true
+	}
+	if strings.HasPrefix(addr, "unix://") {
+		return true
+	}
+	host := addr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	host = strings.ToLower(host)
+	return host == "localhost"
+}
 
 func hasPrefix(path string, prefixes []string) bool {
 	for _, p := range prefixes {
