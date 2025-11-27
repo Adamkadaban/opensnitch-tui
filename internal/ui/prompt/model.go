@@ -2,6 +2,8 @@ package prompt
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -85,7 +87,18 @@ type yaraResultMsg struct {
 
 func scanYaraCmd(promptID, path, rulesDir string) tea.Cmd {
 	return func() tea.Msg {
+		debug := os.Getenv("TUI_DEBUG_YARA") != ""
+		if debug {
+			log.Printf("[yara] scanning prompt=%s path=%s rules=%s", promptID, path, rulesDir)
+		}
 		res, err := yara.ScanFile(path, rulesDir)
+		if debug {
+			if err != nil {
+				log.Printf("[yara] scan error: %v", err)
+			} else {
+				log.Printf("[yara] scan matches: %d", len(res.Matches))
+			}
+		}
 		return yaraResultMsg{promptID: promptID, result: res, err: err}
 	}
 }

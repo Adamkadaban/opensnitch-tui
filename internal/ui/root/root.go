@@ -96,6 +96,12 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.prompt != nil {
+		if cmd, handled := m.prompt.Update(msg); handled {
+			return m, cmd
+		}
+	}
+
 	switch msg := msg.(type) {
 	case storeChangeMsg:
 		m.onStoreChanged()
@@ -111,11 +117,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		if m.prompt != nil {
-			if cmd, handled := m.prompt.Update(msg); handled {
-				return m, cmd
-			}
-		}
 		switch {
 		case key.Matches(msg, m.keymap.Quit):
 			return m, tea.Quit

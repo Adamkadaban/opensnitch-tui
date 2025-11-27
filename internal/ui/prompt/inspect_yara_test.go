@@ -32,14 +32,8 @@ func TestInspectYaraUnavailableStub(t *testing.T) {
 	if !m.inspect {
 		t.Fatalf("expected model to be in inspect mode")
 	}
-	foundYara := false
-	for _, line := range m.inspectInfo.Lines {
-		if strings.Contains(line, "YARA") {
-			foundYara = true
-			break
-		}
-	}
-	if !foundYara {
-		t.Fatalf("expected YARA status line in inspect info, got %v", m.inspectInfo.Lines)
+	view := m.View()
+	if !strings.Contains(view, "YARA") {
+		t.Fatalf("expected YARA status in inspect view; got %q", view)
 	}
 }
