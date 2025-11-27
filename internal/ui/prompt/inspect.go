@@ -244,20 +244,6 @@ func lookupGroup(gid string) (string, error) {
 	return "", fmt.Errorf("group %s not found", gid)
 }
 
-func readProcGid(pid int) string {
-	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Gid:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "Gid:"))
-		}
-	}
-	return ""
-}
-
 // readProcIDs parses /proc/<pid>/status for Uid and Gid lines.
 // Returns arrays [real, effective, saved set, fs].
 func readProcIDs(pid int) ([4]string, [4]string) {
