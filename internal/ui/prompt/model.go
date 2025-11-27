@@ -39,6 +39,7 @@ type Model struct {
 	inspectXOffset int
 	paused         bool
 	yaraPending    bool
+	yaraStatus     string
 }
 
 func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.Cmd {
@@ -51,6 +52,7 @@ func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.
 		m.paused = false
 		m.status = ""
 		m.yaraPending = false
+		m.yaraStatus = ""
 		return nil
 	}
 	// enter inspect
@@ -62,20 +64,30 @@ func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.
 			m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to pause prompt: %v", err))
 		}
 	}
-	info := buildProcessInspect(prompt.Connection)
-	m.inspectInfo = info
+	m.setYaraStatus(prompt, "")
 	m.resetInspectViewport()
 	m.inspect = true
 	// trigger optional YARA scan
-	if settings.YaraEnabled && settings.YaraRuleDir != "" && prompt.Connection.ProcessPath != "" {
-		if !yara.IsAvailable() {
-			m.appendInspectLines("", "YARA: not available (build without -tags yara)")
-			return nil
-		}
-		m.yaraPending = true
-		m.appendInspectLines("", fmt.Sprintf("YARA: scanning %s", prompt.Connection.ProcessPath))
-		return scanYaraCmd(prompt.ID, prompt.Connection.ProcessPath, settings.YaraRuleDir)
+	if !settings.YaraEnabled {
+		m.setYaraStatus(prompt, "YARA: disabled")
+		return nil
 	}
+	if settings.YaraRuleDir == "" {
+		m.setYaraStatus(prompt, "YARA: rule dir not set")
+		return nil
+	}
+	if prompt.Connection.ProcessPath == "" {
+		m.setYaraStatus(prompt, "YARA: process path unknown")
+		return nil
+	}
+	if !yara.IsAvailable() {
+		m.setYaraStatus(prompt, "YARA: not available (build without -tags yara)")
+		return nil
+	}
+	m.yaraPending = true
+	status := fmt.Sprintf("YARA: scanning %s", prompt.Connection.ProcessPath)
+	m.setYaraStatus(prompt, status)
+	return scanYaraCmd(prompt.ID, prompt.Connection.ProcessPath, settings.YaraRuleDir)
 	return nil
 }
 
@@ -115,6 +127,13 @@ func (m *Model) resetInspectViewport() {
 func (m *Model) updateInspectContent() {
 	content := renderInspectContent(m.inspectInfo, m.inspectXOffset, m.inspectVP.Width)
 	m.inspectVP.SetContent(content)
+}
+
+// setYaraStatus rebuilds inspect info with a single YARA status line above the process tree.
+func (m *Model) setYaraStatus(prompt state.Prompt, status string) {
+	m.yaraStatus = status
+	m.inspectInfo = buildProcessInspectWithYara(prompt.Connection, status)
+	m.resetInspectViewport()
 }
 
 func (m *Model) appendInspectLines(lines ...string) {
@@ -322,15 +341,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		m.yaraPending = false
 		if key.err != nil {
-			m.appendInspectLines("", fmt.Sprintf("YARA error: %v", key.err))
+			m.setYaraStatus(prompt, fmt.Sprintf("YARA: error: %v", key.err))
 		} else if len(key.result.Matches) == 0 {
-			m.appendInspectLines("", "YARA: no matches")
+			m.setYaraStatus(prompt, "YARA: no matches")
 		} else {
-			lines := []string{"", "YARA matches:"}
-			for _, m := range key.result.Matches {
-				lines = append(lines, fmt.Sprintf("- %s", m.Rule))
-			}
-			m.appendInspectLines(lines...)
+			m.setYaraStatus(prompt, fmt.Sprintf("YARA: matches (%d)", len(key.result.Matches)))
 		}
 		return nil, true
 	}

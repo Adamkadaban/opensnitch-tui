@@ -65,6 +65,56 @@ func buildProcessInspect(conn state.Connection) processInspect {
 	return processInspect{Lines: lines, MaxWidth: maxWidth}
 }
 
+// buildProcessInspectWithYara returns process inspect info with a YARA status line
+// inserted above the process tree (or appended if no tree is available).
+// It ensures only one YARA line exists by replacing any existing "YARA:" line.
+func buildProcessInspectWithYara(conn state.Connection, yaraStatus string) processInspect {
+	pi := buildProcessInspect(conn)
+	if yaraStatus == "" {
+		return pi
+	}
+	lines := pi.Lines
+	// Remove any existing YARA status lines
+	filtered := lines[:0]
+	for _, l := range lines {
+		if strings.HasPrefix(l, "YARA:") {
+			continue
+		}
+		filtered = append(filtered, l)
+	}
+	lines = filtered
+
+	// Find "Process Tree:" header to insert status above it
+	insertIdx := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "Process Tree:") {
+			insertIdx = i
+			break
+		}
+	}
+	statusLine := yaraStatus
+	if insertIdx == -1 {
+		// Append a blank line then status if no tree header exists
+		lines = append(lines, "", statusLine)
+	} else {
+		// Insert status before tree
+		newLines := make([]string, 0, len(lines)+1)
+		newLines = append(newLines, lines[:insertIdx]...)
+		newLines = append(newLines, statusLine)
+		newLines = append(newLines, lines[insertIdx:]...)
+		lines = newLines
+	}
+
+	pi.Lines = lines
+	pi.MaxWidth = 0
+	for _, l := range lines {
+		if w := runeWidth(l); w > pi.MaxWidth {
+			pi.MaxWidth = w
+		}
+	}
+	return pi
+}
+
 // renderInspectContent slices lines horizontally by offset and clips to width.
 func renderInspectContent(info processInspect, offset, width int) string {
 	if width <= 0 {
