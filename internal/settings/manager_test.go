@@ -104,4 +104,37 @@ func TestManagerSettersPersistNormalizedValues(t *testing.T) {
 	if persisted2.PausePromptOnInspect != false {
 		t.Fatalf("expected persisted PausePromptOnInspect false, got %v", persisted2.PausePromptOnInspect)
 	}
+
+	yaraTempDir := t.TempDir()
+	yaraDir, err := mgr.SetYaraRuleDir(yaraTempDir)
+	if err != nil {
+		t.Fatalf("SetYaraRuleDir error: %v", err)
+	}
+	if yaraDir != yaraTempDir {
+		t.Fatalf("expected yara dir %s, got %s", yaraTempDir, yaraDir)
+	}
+
+	yaraEnabled, err := mgr.SetYaraEnabled(true)
+	if err != nil {
+		t.Fatalf("SetYaraEnabled error: %v", err)
+	}
+	if !yaraEnabled {
+		t.Fatalf("expected YaraEnabled true")
+	}
+
+	persisted3, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if persisted3.YaraRuleDir != yaraTempDir {
+		t.Fatalf("expected persisted YaraRuleDir %s, got %s", yaraTempDir, persisted3.YaraRuleDir)
+	}
+	if !persisted3.YaraEnabled {
+		t.Fatalf("expected persisted YaraEnabled true")
+	}
+
+	// invalid path should error
+	if _, err := mgr.SetYaraRuleDir("/nonexistent/dir/hopefully"); err == nil {
+		t.Fatalf("expected error for invalid YaraRuleDir path")
+	}
 }

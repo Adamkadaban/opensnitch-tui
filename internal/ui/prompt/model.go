@@ -14,6 +14,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/util"
+	"github.com/adamkadaban/opensnitch-tui/internal/yara"
 )
 
 // Model renders and handles interactive connection prompts.
@@ -35,9 +36,10 @@ type Model struct {
 	inspectVP      viewport.Model
 	inspectXOffset int
 	paused         bool
+	yaraPending    bool
 }
 
-func (m *Model) toggleInspect(prompt state.Prompt) {
+func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.Cmd {
 	if m.inspect {
 		// resume
 		if m.controller != nil && m.paused {
@@ -46,10 +48,11 @@ func (m *Model) toggleInspect(prompt state.Prompt) {
 		m.inspect = false
 		m.paused = false
 		m.status = ""
-		return
+		m.yaraPending = false
+		return nil
 	}
 	// enter inspect
-	pauseOnInspect := m.store.Snapshot().Settings.PausePromptOnInspect
+	pauseOnInspect := settings.PausePromptOnInspect
 	if pauseOnInspect && m.controller != nil {
 		if err := m.controller.PausePrompt(prompt.ID); err == nil {
 			m.paused = true
@@ -61,6 +64,30 @@ func (m *Model) toggleInspect(prompt state.Prompt) {
 	m.inspectInfo = info
 	m.resetInspectViewport()
 	m.inspect = true
+	// trigger optional YARA scan
+	if settings.YaraEnabled && settings.YaraRuleDir != "" && prompt.Connection.ProcessPath != "" {
+		if !yara.IsAvailable() {
+			m.appendInspectLines("", "YARA: not available (build without -tags yara)")
+			return nil
+		}
+		m.yaraPending = true
+		m.appendInspectLines("", fmt.Sprintf("YARA: scanning %s", prompt.Connection.ProcessPath))
+		return scanYaraCmd(prompt.ID, prompt.Connection.ProcessPath, settings.YaraRuleDir)
+	}
+	return nil
+}
+
+type yaraResultMsg struct {
+	promptID string
+	result   yara.Result
+	err      error
+}
+
+func scanYaraCmd(promptID, path, rulesDir string) tea.Cmd {
+	return func() tea.Msg {
+		res, err := yara.ScanFile(path, rulesDir)
+		return yaraResultMsg{promptID: promptID, result: res, err: err}
+	}
 }
 
 func (m *Model) resetInspectViewport() {
@@ -75,6 +102,16 @@ func (m *Model) resetInspectViewport() {
 func (m *Model) updateInspectContent() {
 	content := renderInspectContent(m.inspectInfo, m.inspectXOffset, m.inspectVP.Width)
 	m.inspectVP.SetContent(content)
+}
+
+func (m *Model) appendInspectLines(lines ...string) {
+	for _, line := range lines {
+		m.inspectInfo.Lines = append(m.inspectInfo.Lines, line)
+		if w := runeWidth(line); w > m.inspectInfo.MaxWidth {
+			m.inspectInfo.MaxWidth = w
+		}
+	}
+	m.updateInspectContent()
 }
 
 func (m *Model) computeInspectDimensions() (cardWidth, innerWidth, innerHeight int) {
@@ -201,8 +238,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			// handle inspect UI scrolling
 			switch key.String() {
 			case "i", "esc":
-				m.toggleInspect(prompt)
-				return nil, true
+				cmd := m.toggleInspect(prompt, snapshot.Settings)
+				return cmd, true
 			case "up", "k", "ctrl+b", "pgup":
 				m.inspectVP.LineUp(1)
 				return nil, true
@@ -226,8 +263,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		switch key.String() {
 		case "i":
-			m.toggleInspect(prompt)
-			return nil, true
+			cmd := m.toggleInspect(prompt, snapshot.Settings)
+			return cmd, true
 		case "down", "j":
 			m.focus = (m.focus + 1) % 3
 			return nil, true
@@ -260,12 +297,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		case "enter", "esc":
 			if m.inspect {
-				m.toggleInspect(prompt)
-				return nil, true
+				cmd := m.toggleInspect(prompt, snapshot.Settings)
+				return cmd, true
 			}
 			m.submit(prompt, targets, form)
 			return nil, true
 		}
+	case yaraResultMsg:
+		if !m.inspect || key.promptID != m.activeID {
+			return nil, false
+		}
+		m.yaraPending = false
+		if key.err != nil {
+			m.appendInspectLines("", fmt.Sprintf("YARA error: %v", key.err))
+		} else if len(key.result.Matches) == 0 {
+			m.appendInspectLines("", "YARA: no matches")
+		} else {
+			lines := []string{"", "YARA matches:"}
+			for _, m := range key.result.Matches {
+				lines = append(lines, fmt.Sprintf("- %s", m.Rule))
+			}
+			m.appendInspectLines(lines...)
+		}
+		return nil, true
 	}
 
 	return nil, false

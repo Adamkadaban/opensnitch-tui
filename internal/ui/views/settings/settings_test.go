@@ -34,6 +34,8 @@ func (f *fakeSettingsController) SetPromptTimeout(seconds int) (int, error)     
 func (f *fakeSettingsController) SetPausePromptOnInspect(enabled bool) (bool, error) {
 	return enabled, nil
 }
+func (f *fakeSettingsController) SetYaraRuleDir(path string) (string, error) { return path, nil }
+func (f *fakeSettingsController) SetYaraEnabled(enabled bool) (bool, error)  { return enabled, nil }
 
 func TestSettingsViewRenderContainsFields(t *testing.T) {
 	store := state.NewStore()
@@ -42,7 +44,7 @@ func TestSettingsViewRenderContainsFields(t *testing.T) {
 	m.SetSize(80, 20)
 
 	out := m.View()
-	checks := []string{"Theme", "Default action", "Default duration", "Default target", "Prompt timeout", "Alerts interrupt", "Pause alert timeout on inspect"}
+	checks := []string{"Theme", "Default action", "Default duration", "Default target", "Prompt timeout", "Alerts interrupt", "Pause alert timeout on inspect", "YARA scanning enabled", "YARA rule directory"}
 	for _, c := range checks {
 		if !strings.Contains(out, c) {
 			t.Fatalf("expected view to contain %q, got: %s", c, out)

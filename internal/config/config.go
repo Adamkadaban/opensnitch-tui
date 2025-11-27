@@ -31,6 +31,8 @@ type Config struct {
 	PromptTimeoutSeconds  int    `yaml:"prompt_timeout_seconds"`
 	AlertsInterrupt       bool   `yaml:"alerts_interrupt"`
 	PausePromptOnInspect  bool   `yaml:"pause_prompt_on_inspect"`
+	YaraRuleDir           string `yaml:"yara_rule_dir"`
+	YaraEnabled           bool   `yaml:"yara_enabled"`
 	Nodes                 []Node `yaml:"nodes"`
 }
 
@@ -80,6 +82,7 @@ func Default() Config {
 		PromptTimeoutSeconds:  DefaultPromptTimeoutSeconds,
 		AlertsInterrupt:       DefaultAlertsInterrupt,
 		PausePromptOnInspect:  DefaultPausePromptOnInspect,
+		YaraEnabled:           DefaultYaraEnabled,
 		Nodes:                 []Node{},
 	}
 }
@@ -107,6 +110,7 @@ const DefaultPromptTarget = "process.path"
 const DefaultPromptTimeoutSeconds = 30
 const DefaultAlertsInterrupt = true
 const DefaultPausePromptOnInspect = true
+const DefaultYaraEnabled = false
 
 // NormalizePromptAction ensures stored prompts actions stay within supported values.
 func NormalizePromptAction(action string) string {

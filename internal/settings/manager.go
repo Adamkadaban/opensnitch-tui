@@ -1,6 +1,8 @@
 package settings
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -107,6 +109,41 @@ func (m *Manager) SetPausePromptOnInspect(enabled bool) (bool, error) {
 		return m.cfg.PausePromptOnInspect, err
 	}
 	return m.cfg.PausePromptOnInspect, nil
+}
+
+// SetYaraRuleDir sets the directory containing YARA rules.
+func (m *Manager) SetYaraRuleDir(path string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	path = strings.TrimSpace(path)
+	if path != "" {
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", path, err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", path)
+		}
+	}
+
+	m.cfg.YaraRuleDir = path
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return m.cfg.YaraRuleDir, err
+	}
+	return m.cfg.YaraRuleDir, nil
+}
+
+// SetYaraEnabled toggles YARA scanning.
+func (m *Manager) SetYaraEnabled(enabled bool) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.YaraEnabled = enabled
+	if err := config.Save(m.path, m.cfg); err != nil {
+		return m.cfg.YaraEnabled, err
+	}
+	return m.cfg.YaraEnabled, nil
 }
 
 // Config returns a copy of the managed config.

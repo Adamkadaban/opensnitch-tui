@@ -41,6 +41,7 @@ func NewStore() *Store {
 				PromptTimeout:         time.Duration(config.DefaultPromptTimeoutSeconds) * time.Second,
 				AlertsInterrupt:       config.DefaultAlertsInterrupt,
 				PausePromptOnInspect:  config.DefaultPausePromptOnInspect,
+				YaraEnabled:           config.DefaultYaraEnabled,
 			},
 			Prompts: []Prompt{},
 		},

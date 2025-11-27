@@ -57,6 +57,8 @@ func Run(ctx context.Context, opts Options) error {
 		PromptTimeout:         time.Duration(cfg.PromptTimeoutSeconds) * time.Second,
 		AlertsInterrupt:       cfg.AlertsInterrupt,
 		PausePromptOnInspect:  cfg.PausePromptOnInspect,
+		YaraRuleDir:           cfg.YaraRuleDir,
+		YaraEnabled:           cfg.YaraEnabled,
 	})
 
 	km := keymap.DefaultGlobal()

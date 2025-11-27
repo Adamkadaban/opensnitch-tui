@@ -23,6 +23,8 @@ type SettingsManager interface {
 	SetAlertsInterrupt(enabled bool) (bool, error)
 	SetPromptTimeout(seconds int) (int, error)
 	SetPausePromptOnInspect(enabled bool) (bool, error)
+	SetYaraRuleDir(path string) (string, error)
+	SetYaraEnabled(enabled bool) (bool, error)
 }
 
 // PromptDecision captures an operator's selection for a pending prompt.

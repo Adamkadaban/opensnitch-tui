@@ -2,12 +2,15 @@ package settings
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/charmbracelet/bubbles/textinput"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
@@ -33,6 +36,8 @@ type Model struct {
 	timeoutIdx      int
 	alertsInterrupt bool
 	pauseOnInspect  bool
+	yaraEnabled     bool
+	yaraRuleDir     textinput.Model
 	status          string
 }
 
@@ -46,9 +51,11 @@ const (
 	fieldPromptTimeout
 	fieldAlertsInterrupt
 	fieldPauseOnInspect
+	fieldYaraEnabled
+	fieldYaraRuleDir
 )
 
-const settingsFieldCount = 7
+const settingsFieldCount = 9
 
 type option struct {
 	label string
@@ -90,6 +97,10 @@ var themeOptions = buildThemeOptions()
 // New constructs a settings view model.
 func New(store *state.Store, th theme.Theme, ctrl controller.SettingsManager) view.Model {
 	m := &Model{store: store, theme: th, controller: ctrl}
+	m.yaraRuleDir = textinput.New()
+	m.yaraRuleDir.Placeholder = "/path/to/yara_rules"
+	m.yaraRuleDir.CharLimit = 0
+	m.yaraRuleDir.Width = 40
 	m.syncSelection()
 	return m
 }
@@ -108,8 +119,33 @@ func (m *Model) SetTheme(th theme.Theme) {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch key := msg.(type) {
 	case tea.KeyMsg:
+		// Special handling for text input field
+		if m.focus == fieldYaraRuleDir {
+			// Manage input focus
+			m.yaraRuleDir.Focus()
+			switch key.Type {
+			case tea.KeyTab:
+				m.yaraRuleDir.Blur()
+				m.focus = (m.focus + 1) % settingsFieldCount
+				return m, nil
+			case tea.KeyShiftTab:
+				m.yaraRuleDir.Blur()
+				m.focus--
+				if m.focus < 0 {
+					m.focus = settingsFieldCount - 1
+				}
+				return m, nil
+			case tea.KeyEnter:
+				m.persistYaraRuleDir()
+				return m, nil
+			}
+			m.yaraRuleDir, cmd = m.yaraRuleDir.Update(msg)
+			return m, cmd
+		}
+
 		switch key.String() {
 		case "tab", "down", "j":
 			m.focus = (m.focus + 1) % settingsFieldCount
@@ -126,6 +162,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.persistAll()
 		case "s":
 			m.persistFocused()
+		}
+
+		// Blur text input when leaving it
+		if m.focus != fieldYaraRuleDir {
+			m.yaraRuleDir.Blur()
 		}
 	}
 
@@ -144,10 +185,15 @@ func (m *Model) View() string {
 		m.renderToggle("Alerts interrupt", m.alertsInterrupt, m.focus == fieldAlertsInterrupt),
 		m.renderToggle("Pause alert timeout on inspect", m.pauseOnInspect, m.focus == fieldPauseOnInspect),
 	}
+	security := []string{
+		m.renderToggle("YARA scanning enabled", m.yaraEnabled, m.focus == fieldYaraEnabled),
+		m.renderInput("YARA rule directory", m.yaraRuleDir, m.focus == fieldYaraRuleDir),
+	}
 
 	body := []string{
 		m.renderSection("General", general),
 		m.renderSection("Alerts", alerts),
+		m.renderSection("Security", security),
 		m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter save all · s save focused"),
 	}
 	if m.status != "" {
@@ -171,6 +217,8 @@ func (m *Model) syncSelection() {
 	m.timeoutIdx = optionIndex(promptTimeouts, fmt.Sprintf("%d", timeoutSeconds))
 	m.alertsInterrupt = snapshot.Settings.AlertsInterrupt
 	m.pauseOnInspect = snapshot.Settings.PausePromptOnInspect
+	m.yaraEnabled = snapshot.Settings.YaraEnabled
+	m.yaraRuleDir.SetValue(snapshot.Settings.YaraRuleDir)
 }
 
 func (m *Model) persistFocused() {
@@ -193,6 +241,10 @@ func (m *Model) persistFocused() {
 		m.persistAlertsInterrupt()
 	case fieldPauseOnInspect:
 		m.persistPauseOnInspect()
+	case fieldYaraEnabled:
+		m.persistYaraEnabled()
+	case fieldYaraRuleDir:
+		m.persistYaraRuleDir()
 	}
 }
 
@@ -227,6 +279,14 @@ func (m *Model) persistAll() {
 	}
 	if _, err := m.savePauseOnInspect(m.pauseOnInspect); err != nil {
 		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save pause-on-inspect: %v", err))
+		return
+	}
+	if _, err := m.saveYaraEnabled(m.yaraEnabled); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save YARA enabled: %v", err))
+		return
+	}
+	if _, err := m.saveYaraRuleDir(m.yaraRuleDir.Value()); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save YARA rule dir: %v", err))
 		return
 	}
 	m.status = m.theme.Success.Render("Settings saved")
@@ -275,6 +335,13 @@ func (m *Model) shiftSelection(delta int) {
 		}
 		current = util.WrapIndex(current, delta, 2)
 		m.pauseOnInspect = current == 1
+	case fieldYaraEnabled:
+		current := 0
+		if m.yaraEnabled {
+			current = 1
+		}
+		current = util.WrapIndex(current, delta, 2)
+		m.yaraEnabled = current == 1
 	}
 }
 
@@ -327,6 +394,24 @@ func (m *Model) persistPauseOnInspect() {
 		m.status = m.theme.Success.Render("Inspect will pause timeouts")
 	} else {
 		m.status = m.theme.Success.Render("Inspect won’t pause timeouts")
+	}
+}
+
+func (m *Model) persistYaraEnabled() {
+	if enabled, err := m.saveYaraEnabled(m.yaraEnabled); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save YARA enabled: %v", err))
+	} else if enabled {
+		m.status = m.theme.Success.Render("YARA scanning enabled")
+	} else {
+		m.status = m.theme.Success.Render("YARA scanning disabled")
+	}
+}
+
+func (m *Model) persistYaraRuleDir() {
+	if value, err := m.saveYaraRuleDir(m.yaraRuleDir.Value()); err != nil {
+		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save YARA rule dir: %v", err))
+	} else {
+		m.status = m.theme.Success.Render(fmt.Sprintf("YARA rule dir set to %s", value))
 	}
 }
 
@@ -419,6 +504,43 @@ func (m *Model) savePauseOnInspect(enabled bool) (bool, error) {
 	return value, nil
 }
 
+func (m *Model) saveYaraEnabled(enabled bool) (bool, error) {
+	value, err := m.controller.SetYaraEnabled(enabled)
+	if err != nil {
+		return false, err
+	}
+	m.yaraEnabled = value
+	m.updateSettings(func(settings *state.Settings) {
+		settings.YaraEnabled = value
+	})
+	return value, nil
+}
+
+func (m *Model) saveYaraRuleDir(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path != "" {
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", path, err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", path)
+		}
+	}
+	if m.yaraEnabled && path == "" {
+		return "", fmt.Errorf("YARA rule directory required when YARA scanning is enabled")
+	}
+	value, err := m.controller.SetYaraRuleDir(path)
+	if err != nil {
+		return "", err
+	}
+	m.yaraRuleDir.SetValue(value)
+	m.updateSettings(func(settings *state.Settings) {
+		settings.YaraRuleDir = value
+	})
+	return value, nil
+}
+
 func (m *Model) updateSettings(mut func(*state.Settings)) {
 	if mut == nil {
 		return
@@ -444,6 +566,11 @@ func (m *Model) renderToggle(label string, enabled bool, focused bool) string {
 		idx = 1
 	}
 	return m.renderRow(label, options, idx, focused)
+}
+
+func (m *Model) renderInput(label string, input textinput.Model, _ bool) string {
+	// The textinput is already styled by bubbles; don’t wrap with extra ANSI.
+	return fmt.Sprintf("%s: %s", label, input.View())
 }
 
 func (m *Model) renderRow(label string, opts []option, selected int, focused bool) string {

@@ -111,6 +111,8 @@ type Settings struct {
 	PromptTimeout         time.Duration
 	AlertsInterrupt       bool
 	PausePromptOnInspect  bool
+	YaraRuleDir           string
+	YaraEnabled           bool
 }
 
 // Connection stores the details of an outbound connection awaiting operator input.
