@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -24,11 +25,87 @@ type Model struct {
 	width  int
 	height int
 
-	focus     field
-	promptIdx int
-	forms     map[string]*formState
-	status    string
-	activeID  string
+	focus          field
+	promptIdx      int
+	forms          map[string]*formState
+	status         string
+	activeID       string
+	inspect        bool
+	inspectInfo    processInspect
+	inspectVP      viewport.Model
+	inspectXOffset int
+	paused         bool
+}
+
+func (m *Model) toggleInspect(prompt state.Prompt) {
+	if m.inspect {
+		// resume
+		if m.controller != nil && m.paused {
+			_ = m.controller.ResumePrompt(prompt.ID)
+		}
+		m.inspect = false
+		m.paused = false
+		m.status = ""
+		return
+	}
+	// enter inspect
+	if m.controller != nil {
+		if err := m.controller.PausePrompt(prompt.ID); err == nil {
+			m.paused = true
+		} else {
+			m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to pause prompt: %v", err))
+		}
+	}
+	info := buildProcessInspect(prompt.Connection)
+	m.inspectInfo = info
+	m.resetInspectViewport()
+	m.inspect = true
+}
+
+func (m *Model) resetInspectViewport() {
+	cardW, innerW, innerH := m.computeInspectDimensions()
+	_ = cardW // unused here, but ensures consistency
+	m.inspectVP = viewport.New(innerW, innerH)
+	m.inspectVP.YPosition = 1
+	m.inspectXOffset = 0
+	m.updateInspectContent()
+}
+
+func (m *Model) updateInspectContent() {
+	content := renderInspectContent(m.inspectInfo, m.inspectXOffset, m.inspectVP.Width)
+	m.inspectVP.SetContent(content)
+}
+
+func (m *Model) computeInspectDimensions() (cardWidth, innerWidth, innerHeight int) {
+	maxCardWidth := min(m.width-2, 96)
+	frameW, frameH := m.theme.Card.GetFrameSize()
+	cardWidth = max(frameW+10, maxCardWidth)
+	innerWidth = cardWidth - frameW
+	// header + footer = 2 lines
+	innerHeight = max(3, m.height-frameH-2)
+	return
+}
+
+func (m *Model) adjustInspectX(delta int) {
+	if delta == 0 {
+		return
+	}
+	maxOffset := 0
+	if m.inspectInfo.MaxWidth > m.inspectVP.Width {
+		maxOffset = m.inspectInfo.MaxWidth - m.inspectVP.Width
+	}
+	newOffset := m.inspectXOffset + delta
+	if newOffset < 0 {
+		newOffset = 0
+	}
+	if newOffset > maxOffset {
+		newOffset = maxOffset
+	}
+	if newOffset == m.inspectXOffset {
+		return
+	}
+	m.inspectXOffset = newOffset
+	m.updateInspectContent()
 }
 
 type field int
@@ -74,6 +151,11 @@ var durationOptions = []durationOption{
 
 var fallbackPromptTimeout = time.Duration(config.DefaultPromptTimeoutSeconds) * time.Second
 
+type processInspect struct {
+	Lines    []string
+	MaxWidth int
+}
+
 func New(store *state.Store, th theme.Theme, ctrl controller.PromptManager) *Model {
 	return &Model{
 		store:      store,
@@ -88,6 +170,9 @@ func (m *Model) Init() tea.Cmd { return nil }
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+	if m.inspect {
+		m.resetInspectViewport()
+	}
 }
 
 func (m *Model) SetTheme(th theme.Theme) {
@@ -113,7 +198,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 
 	switch key := msg.(type) {
 	case tea.KeyMsg:
+		if m.inspect {
+			// handle inspect UI scrolling
+			switch key.String() {
+			case "i", "esc":
+				m.toggleInspect(prompt)
+				return nil, true
+			case "up", "k", "ctrl+b", "pgup":
+				m.inspectVP.LineUp(1)
+				return nil, true
+			case "down", "j", "ctrl+f", "pgdown":
+				m.inspectVP.LineDown(1)
+				return nil, true
+			case "g":
+				m.inspectVP.GotoTop()
+				return nil, true
+			case "G":
+				m.inspectVP.GotoBottom()
+				return nil, true
+			case "left":
+				m.adjustInspectX(-4)
+				return nil, true
+			case "right":
+				m.adjustInspectX(4)
+				return nil, true
+			}
+			return nil, true
+		}
 		switch key.String() {
+		case "i":
+			m.toggleInspect(prompt)
+			return nil, true
 		case "tab":
 			if allowTabPassthrough {
 				return nil, false
@@ -160,6 +275,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			m.shiftPrompt(1)
 			return nil, true
 		case "enter", "esc":
+			if m.inspect {
+				m.toggleInspect(prompt)
+				return nil, true
+			}
 			m.submit(prompt, targets, form)
 			return nil, true
 		}
@@ -176,6 +295,22 @@ func (m *Model) View() string {
 	prompt, targets, form, ok := m.promptStateFromSnapshot(snapshot)
 	if !ok {
 		return ""
+	}
+
+	if m.inspect {
+		cardW, innerW, innerH := m.computeInspectDimensions()
+		if m.inspectVP.Width != innerW || m.inspectVP.Height != innerH {
+			m.inspectVP.Width = innerW
+			m.inspectVP.Height = innerH
+			m.updateInspectContent()
+		}
+		body := lipgloss.JoinVertical(lipgloss.Left,
+			m.theme.Header.Render("Process inspection"),
+			m.inspectVP.View(),
+			m.theme.Subtle.Render("[esc/i] back · scroll ↑/↓ ←/→ · countdown paused"),
+		)
+		card := m.theme.Card.Width(cardW)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, card.Render(body))
 	}
 
 	headline := fmt.Sprintf("Connection prompt · %s · node %s", prompt.ID, prompt.NodeName)
@@ -195,7 +330,7 @@ func (m *Model) View() string {
 	durationRow := m.renderChoices("Duration", mapDurationLabels(durationOptions), form.duration, m.focus == fieldDuration)
 	targetRow := m.renderChoices("Target", mapTargetLabels(targets), form.target, m.focus == fieldTarget)
 
-	controls := m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter confirm · [/] cycle prompts")
+	controls := m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter confirm · i inspect · [/] cycle prompts")
 	expiresAt := prompt.ExpiresAt
 	if expiresAt.IsZero() && !prompt.RequestedAt.IsZero() {
 		timeout := snapshot.Settings.PromptTimeout

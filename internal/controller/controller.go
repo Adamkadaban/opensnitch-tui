@@ -10,6 +10,8 @@ type RuleManager interface {
 // PromptManager resolves interactive connection prompts surfaced by the daemon.
 type PromptManager interface {
 	ResolvePrompt(decision PromptDecision) error
+	PausePrompt(promptID string) error
+	ResumePrompt(promptID string) error
 }
 
 // SettingsManager persists UI configuration choices.
