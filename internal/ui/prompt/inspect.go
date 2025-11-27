@@ -7,11 +7,32 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 )
 
-func buildProcessInspect(conn state.Connection) processInspect {
+type PathHighlighter func(string) string
+
+func hasPrefix(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchedPrefix(path string, prefixes []string) string {
+	for _, p := range prefixes {
+		if strings.HasPrefix(path, p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func buildProcessInspect(conn state.Connection, hl PathHighlighter) processInspect {
 	lines := []string{}
 	maxWidth := 0
 	track := func(s string) {
@@ -25,13 +46,21 @@ func buildProcessInspect(conn state.Connection) processInspect {
 		track(fmt.Sprintf("PID: %d", pid))
 	}
 	if conn.ProcessPath != "" {
-		track(fmt.Sprintf("Executable: %s", conn.ProcessPath))
+		path := conn.ProcessPath
+		if hl != nil {
+			path = hl(path)
+		}
+		track(fmt.Sprintf("Executable: %s", path))
 	}
 	if len(conn.ProcessArgs) > 0 {
 		track(fmt.Sprintf("Args: %s", strings.Join(conn.ProcessArgs, " ")))
 	}
 	if conn.ProcessCWD != "" {
-		track(fmt.Sprintf("CWD: %s", conn.ProcessCWD))
+		cwd := conn.ProcessCWD
+		if hl != nil {
+			cwd = hl(cwd)
+		}
+		track(fmt.Sprintf("CWD: %s", cwd))
 	}
 	if conn.UserID != 0 {
 		track(fmt.Sprintf("User: %s", resolveUser(uint32(conn.UserID))))
@@ -50,7 +79,7 @@ func buildProcessInspect(conn state.Connection) processInspect {
 			track(fmt.Sprintf("Group (effective): %s", resolveGroup(gids[1])))
 		}
 
-		if tree := readProcessTree(pid); len(tree) > 0 {
+		if tree := readProcessTree(pid, hl); len(tree) > 0 {
 			track("")
 			track("Process Tree:")
 			for _, line := range tree {
@@ -65,9 +94,7 @@ func buildProcessInspect(conn state.Connection) processInspect {
 	return processInspect{Lines: lines, MaxWidth: maxWidth}
 }
 
-// buildProcessInspectWithYara returns process inspect info with a YARA status line
-// inserted above the process tree (or appended if no tree is available).
-// It ensures only one YARA line exists by replacing any existing "YARA:" line.
+// (YARA status is rendered in the header; content remains plain process info.)
 
 // renderInspectContent slices lines horizontally by offset and clips to width.
 func renderInspectContent(info processInspect, offset, width int) string {
@@ -76,22 +103,85 @@ func renderInspectContent(info processInspect, offset, width int) string {
 	}
 	rows := make([]string, len(info.Lines))
 	for i, line := range info.Lines {
-		runes := []rune(line)
-		if offset >= len(runes) {
+		raw := stripANSI(line)
+		if offset >= len([]rune(raw)) {
 			rows[i] = ""
 			continue
 		}
-		segment := runes[offset:]
-		if len(segment) > width {
-			segment = segment[:width]
-		}
-		rows[i] = string(segment)
+		rows[i] = ansiSlice(line, offset, width)
 	}
 	return strings.Join(rows, "\n")
 }
 
 // runeWidth returns the number of runes in s.
-func runeWidth(s string) int { return len([]rune(s)) }
+func runeWidth(s string) int { return len([]rune(stripANSI(s))) }
+
+// stripANSI removes ANSI escape sequences from s.
+func stripANSI(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && !((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= 'a' && s[j] <= 'z')) {
+				j++
+			}
+			if j < len(s) {
+				i = j + 1
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		b.WriteRune(r)
+		i += size
+	}
+	return b.String()
+}
+
+// ansiSlice returns the substring of s corresponding to visible runes [offset, offset+width), preserving ANSI codes.
+func ansiSlice(s string, offset, width int) string {
+	var b strings.Builder
+	visible := 0
+	started := false
+	lastSGR := ""
+	for i := 0; i < len(s); {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && !((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= 'a' && s[j] <= 'z')) {
+				j++
+			}
+			if j < len(s) {
+				esc := s[i : j+1]
+				if esc[len(esc)-1] == 'm' {
+					lastSGR = esc
+				}
+				if started {
+					b.WriteString(esc)
+				}
+				i = j + 1
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			break
+		}
+		if visible >= offset && visible < offset+width {
+			if !started {
+				started = true
+				if lastSGR != "" {
+					b.WriteString(lastSGR)
+				}
+			}
+			b.WriteRune(r)
+		}
+		visible++
+		i += size
+		if visible >= offset+width {
+			break
+		}
+	}
+	return b.String()
+}
 
 type procNode struct {
 	PID      int
@@ -101,8 +191,8 @@ type procNode struct {
 	Children []*procNode
 }
 
-func readProcessTree(pid int) []string {
-	root := buildTree(pid, map[int]bool{}, 0)
+func readProcessTree(pid int, hl PathHighlighter) []string {
+	root := buildTree(pid, map[int]bool{}, 0, hl)
 	if root == nil {
 		return nil
 	}
@@ -137,7 +227,7 @@ func readProcStat(pid int) (comm string, ppid int) {
 	return comm, ppid
 }
 
-func buildTree(pid int, visited map[int]bool, depth int) *procNode {
+func buildTree(pid int, visited map[int]bool, depth int, hl PathHighlighter) *procNode {
 	if depth > 128 {
 		return nil
 	}
@@ -148,9 +238,12 @@ func buildTree(pid int, visited map[int]bool, depth int) *procNode {
 	comm, _ := readProcStat(pid)
 	cmdline := readProcCmdline(pid)
 	path := readProcExe(pid)
+	if hl != nil {
+		path = hl(path)
+	}
 	node := &procNode{PID: pid, Comm: comm, Cmdline: cmdline, Path: path}
 	for _, child := range readProcChildren(pid) {
-		if cnode := buildTree(child, visited, depth+1); cnode != nil {
+		if cnode := buildTree(child, visited, depth+1, hl); cnode != nil {
 			node.Children = append(node.Children, cnode)
 		}
 	}

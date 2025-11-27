@@ -44,6 +44,24 @@ type Model struct {
 	inspectRoot    bool
 }
 
+var (
+	friendlyPaths = []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin"}
+	dangerPaths   = []string{"/tmp", "/var/tmp", "/dev/shm", "/run", "/home", "/root"}
+)
+
+func (m *Model) highlightPath(path string) string {
+	style := m.theme.Warning
+	if hasPrefix(path, friendlyPaths) {
+		style = m.theme.Success
+	} else if hasPrefix(path, dangerPaths) {
+		style = m.theme.Danger
+	}
+	if prefix := matchedPrefix(path, append(friendlyPaths, dangerPaths...)); prefix != "" {
+		return style.Render(prefix) + path[len(prefix):]
+	}
+	return style.Render(path)
+}
+
 type yaraStatusKind int
 
 const (
@@ -91,7 +109,7 @@ func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.
 		}
 	}
 	m.inspectRoot = root
-	m.inspectInfo = buildProcessInspect(prompt.Connection)
+	m.inspectInfo = buildProcessInspect(prompt.Connection, m.highlightPath)
 	m.resetInspectViewport()
 	m.setYaraStatus("", yaraStatusUnknown)
 	m.inspect = true

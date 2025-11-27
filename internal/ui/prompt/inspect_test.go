@@ -18,7 +18,7 @@ func TestBuildProcessInspect_IncludesRealGroup(t *testing.T) {
 	}
 
 	pid := os.Getpid()
-	info := buildProcessInspect(state.Connection{ProcessID: uint32(pid)})
+	info := buildProcessInspect(state.Connection{ProcessID: uint32(pid)}, nil)
 
 	hasRealGroup := false
 	for _, line := range info.Lines {
