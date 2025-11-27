@@ -40,7 +40,24 @@ type Model struct {
 	paused         bool
 	yaraPending    bool
 	yaraStatus     string
+	yaraKind       yaraStatusKind
+	inspectRoot    bool
 }
+
+type yaraStatusKind int
+
+const (
+	yaraStatusUnknown yaraStatusKind = iota
+	yaraStatusScanning
+	yaraStatusNoMatches
+	yaraStatusMatches
+	yaraStatusError
+	yaraStatusDisabled
+	yaraStatusNotAvailable
+	yaraStatusRuleDirMissing
+	yaraStatusPathUnknown
+	yaraStatusTimeout
+)
 
 func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.Cmd {
 	if m.inspect {
@@ -64,31 +81,41 @@ func (m *Model) toggleInspect(prompt state.Prompt, settings state.Settings) tea.
 			m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to pause prompt: %v", err))
 		}
 	}
-	m.setYaraStatus(prompt, "")
+
+	// detect root (real or effective)
+	root := prompt.Connection.UserID == 0
+	if !root && prompt.Connection.ProcessID != 0 {
+		uids, _ := readProcIDs(int(prompt.Connection.ProcessID))
+		if uids[1] == "0" { // effective UID
+			root = true
+		}
+	}
+	m.inspectRoot = root
+	m.inspectInfo = buildProcessInspect(prompt.Connection)
 	m.resetInspectViewport()
+	m.setYaraStatus("", yaraStatusUnknown)
 	m.inspect = true
 	// trigger optional YARA scan
 	if !settings.YaraEnabled {
-		m.setYaraStatus(prompt, "YARA: disabled")
+		m.setYaraStatus("YARA: disabled", yaraStatusDisabled)
 		return nil
 	}
 	if settings.YaraRuleDir == "" {
-		m.setYaraStatus(prompt, "YARA: rule dir not set")
+		m.setYaraStatus("YARA: rule dir not set", yaraStatusRuleDirMissing)
 		return nil
 	}
 	if prompt.Connection.ProcessPath == "" {
-		m.setYaraStatus(prompt, "YARA: process path unknown")
+		m.setYaraStatus("YARA: process path unknown", yaraStatusPathUnknown)
 		return nil
 	}
 	if !yara.IsAvailable() {
-		m.setYaraStatus(prompt, "YARA: not available (build without -tags yara)")
+		m.setYaraStatus("YARA: not available (build without -tags yara)", yaraStatusNotAvailable)
 		return nil
 	}
 	m.yaraPending = true
 	status := fmt.Sprintf("YARA: scanning %s", prompt.Connection.ProcessPath)
-	m.setYaraStatus(prompt, status)
+	m.setYaraStatus(status, yaraStatusScanning)
 	return scanYaraCmd(prompt.ID, prompt.Connection.ProcessPath, settings.YaraRuleDir)
-	return nil
 }
 
 type yaraResultMsg struct {
@@ -130,10 +157,9 @@ func (m *Model) updateInspectContent() {
 }
 
 // setYaraStatus rebuilds inspect info with a single YARA status line above the process tree.
-func (m *Model) setYaraStatus(prompt state.Prompt, status string) {
+func (m *Model) setYaraStatus(status string, kind yaraStatusKind) {
 	m.yaraStatus = status
-	m.inspectInfo = buildProcessInspectWithYara(prompt.Connection, status)
-	m.resetInspectViewport()
+	m.yaraKind = kind
 }
 
 func (m *Model) appendInspectLines(lines ...string) {
@@ -344,11 +370,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		m.yaraPending = false
 		if key.err != nil {
-			m.setYaraStatus(prompt, fmt.Sprintf("YARA: error: %v", key.err))
+			m.setYaraStatus(fmt.Sprintf("YARA: error: %v", key.err), yaraStatusError)
 		} else if len(key.result.Matches) == 0 {
-			m.setYaraStatus(prompt, "YARA: no matches")
+			m.setYaraStatus("YARA: no matches", yaraStatusNoMatches)
 		} else {
-			m.setYaraStatus(prompt, fmt.Sprintf("YARA: matches (%d)", len(key.result.Matches)))
+			m.setYaraStatus(fmt.Sprintf("YARA: matches (%d)", len(key.result.Matches)), yaraStatusMatches)
 		}
 		return nil, true
 	}
@@ -380,8 +406,26 @@ func (m *Model) View() string {
 		} else {
 			statusLine += " · countdown running"
 		}
+		header := []string{m.theme.Header.Render("Process inspection")}
+		if m.inspectRoot {
+			header = append(header, m.theme.Danger.Render("⚠ Root user"))
+		}
+		if m.yaraStatus != "" {
+			style := m.theme.Subtle
+			switch m.yaraKind {
+			case yaraStatusScanning:
+				style = m.theme.Warning
+			case yaraStatusNoMatches:
+				style = m.theme.Success
+			case yaraStatusMatches, yaraStatusError, yaraStatusNotAvailable, yaraStatusRuleDirMissing, yaraStatusPathUnknown, yaraStatusTimeout:
+				style = m.theme.Danger
+			case yaraStatusDisabled:
+				style = m.theme.Subtle
+			}
+			header = append(header, style.Render(m.yaraStatus))
+		}
 		body := lipgloss.JoinVertical(lipgloss.Left,
-			m.theme.Header.Render("Process inspection"),
+			strings.Join(header, "\n"),
 			m.inspectVP.View(),
 			m.theme.Subtle.Render(statusLine),
 		)
