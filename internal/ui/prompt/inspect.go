@@ -40,6 +40,9 @@ func buildProcessInspect(conn state.Connection) processInspect {
 	// Best-effort /proc inspection (only works if TUI host == process host)
 	if pid > 0 {
 		uids, gids := readProcIDs(pid)
+		if gids[0] != "" {
+			track(fmt.Sprintf("Group: %s", resolveGroup(gids[0])))
+		}
 		if uids[1] != "" {
 			track(fmt.Sprintf("User (effective): %s", resolveUserString(uids[1])))
 		}
