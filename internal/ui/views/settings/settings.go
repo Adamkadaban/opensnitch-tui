@@ -587,9 +587,14 @@ func (m *Model) renderToggle(label string, enabled bool, focused bool) string {
 	return m.renderRow(label, options, idx, focused)
 }
 
-func (m *Model) renderInput(label string, input textinput.Model, _ bool) string {
-	// The textinput is already styled by bubbles; don’t wrap with extra ANSI.
-	return fmt.Sprintf("%s: %s", label, input.View())
+func (m *Model) renderInput(label string, input textinput.Model, focused bool) string {
+	ti := input
+	if focused {
+		ti.Prompt = m.theme.Warning.Render("> ")
+	} else {
+		ti.Prompt = "  "
+	}
+	return fmt.Sprintf("%s: %s", label, ti.View())
 }
 
 func (m *Model) renderRow(label string, opts []option, selected int, focused bool) string {
