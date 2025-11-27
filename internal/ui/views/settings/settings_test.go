@@ -59,8 +59,8 @@ func TestSettingsViewPersistThemeOnSaveFocused(t *testing.T) {
 	m := New(store, th, ctrl).(*Model)
 	m.SetSize(80, 20)
 
-	// Focus on theme (default focus) and press 's'
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	// Focus on theme (default focus) and press Enter to save
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if ctrl.setThemeCalls != 1 {
 		t.Fatalf("expected SetTheme to be called once, got %d", ctrl.setThemeCalls)

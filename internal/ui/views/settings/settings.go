@@ -141,27 +141,46 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyEnter:
 				m.persistYaraRuleDir()
 				return m, nil
+			case tea.KeyUp:
+				m.yaraRuleDir.Blur()
+				m.focus--
+				if m.focus < 0 {
+					m.focus = settingsFieldCount - 1
+				}
+				return m, nil
+			case tea.KeyDown:
+				m.yaraRuleDir.Blur()
+				m.focus = (m.focus + 1) % settingsFieldCount
+				return m, nil
+			case tea.KeyEsc:
+				m.yaraRuleDir.Blur()
+				return m, nil
 			}
 			m.yaraRuleDir, cmd = m.yaraRuleDir.Update(msg)
 			return m, cmd
 		}
-
-		switch key.String() {
-		case "tab", "down", "j":
+		// General navigation (non-text fields): only arrows/tab/enter
+		switch key.Type {
+		case tea.KeyTab:
 			m.focus = (m.focus + 1) % settingsFieldCount
-		case "shift+tab", "up", "k":
+		case tea.KeyShiftTab:
 			m.focus--
 			if m.focus < 0 {
 				m.focus = settingsFieldCount - 1
 			}
-		case "left", "h":
+		case tea.KeyDown:
+			m.focus = (m.focus + 1) % settingsFieldCount
+		case tea.KeyUp:
+			m.focus--
+			if m.focus < 0 {
+				m.focus = settingsFieldCount - 1
+			}
+		case tea.KeyLeft:
 			m.shiftSelection(-1)
-		case "right", "l":
+		case tea.KeyRight:
 			m.shiftSelection(1)
-		case "enter":
+		case tea.KeyEnter:
 			m.persistAll()
-		case "s":
-			m.persistFocused()
 		}
 
 		// Blur text input when leaving it
