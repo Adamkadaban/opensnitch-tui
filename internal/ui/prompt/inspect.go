@@ -39,15 +39,20 @@ func buildProcessInspect(conn state.Connection) processInspect {
 
 	// Best-effort /proc inspection (only works if TUI host == process host)
 	if pid > 0 {
+		uids, gids := readProcIDs(pid)
+		if uids[1] != "" {
+			track(fmt.Sprintf("User (effective): %s", resolveUserString(uids[1])))
+		}
+		if gids[1] != "" {
+			track(fmt.Sprintf("Group (effective): %s", resolveGroup(gids[1])))
+		}
+
 		if tree := readProcessTree(pid); len(tree) > 0 {
 			track("")
 			track("Process Tree:")
 			for _, line := range tree {
 				track(line)
 			}
-		}
-		if gid := readProcGid(pid); gid != "" {
-			track(fmt.Sprintf("Group: %s", resolveGroup(gid)))
 		}
 	}
 
@@ -248,4 +253,39 @@ func readProcGid(pid int) string {
 		}
 	}
 	return ""
+}
+
+// readProcIDs parses /proc/<pid>/status for Uid and Gid lines.
+// Returns arrays [real, effective, saved set, fs].
+func readProcIDs(pid int) ([4]string, [4]string) {
+	var uids, gids [4]string
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	if err != nil {
+		return uids, gids
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "Uid:") {
+			fields := strings.Fields(strings.TrimPrefix(line, "Uid:"))
+			for i := 0; i < len(fields) && i < 4; i++ {
+				uids[i] = fields[i]
+			}
+		}
+		if strings.HasPrefix(line, "Gid:") {
+			fields := strings.Fields(strings.TrimPrefix(line, "Gid:"))
+			for i := 0; i < len(fields) && i < 4; i++ {
+				gids[i] = fields[i]
+			}
+		}
+	}
+	return uids, gids
+}
+
+func resolveUserString(id string) string {
+	if id == "" {
+		return ""
+	}
+	if v, err := strconv.ParseUint(id, 10, 32); err == nil {
+		return resolveUser(uint32(v))
+	}
+	return id
 }

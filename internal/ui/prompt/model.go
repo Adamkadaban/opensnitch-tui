@@ -194,8 +194,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
-	allowTabPassthrough := !snapshot.Settings.AlertsInterrupt && snapshot.ActiveView == state.ViewAlerts
-
 	switch key := msg.(type) {
 	case tea.KeyMsg:
 		if m.inspect {
@@ -228,21 +226,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 		switch key.String() {
 		case "i":
 			m.toggleInspect(prompt)
-			return nil, true
-		case "tab":
-			if allowTabPassthrough {
-				return nil, false
-			}
-			m.focus = (m.focus + 1) % 3
-			return nil, true
-		case "shift+tab":
-			if allowTabPassthrough {
-				return nil, false
-			}
-			m.focus--
-			if m.focus < 0 {
-				m.focus = fieldTarget
-			}
 			return nil, true
 		case "down", "j":
 			m.focus = (m.focus + 1) % 3
