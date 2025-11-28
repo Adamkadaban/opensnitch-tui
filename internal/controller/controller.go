@@ -1,10 +1,13 @@
 package controller
 
+import "github.com/adamkadaban/opensnitch-tui/internal/state"
+
 // RuleManager exposes CRUD operations for daemon rules.
 type RuleManager interface {
 	EnableRule(nodeID, ruleName string) error
 	DisableRule(nodeID, ruleName string) error
 	DeleteRule(nodeID, ruleName string) error
+	ChangeRule(nodeID string, rule state.Rule) error
 }
 
 // PromptManager resolves interactive connection prompts surfaced by the daemon.

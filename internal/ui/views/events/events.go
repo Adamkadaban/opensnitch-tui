@@ -77,15 +77,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch key := msg.(type) {
 	case tea.KeyMsg:
 		switch key.String() {
-		case "left", "h":
+		case "left":
 			m.adjustTableX(-4)
-		case "right", "l":
+		case "right":
 			m.adjustTableX(4)
-		case "up", "k":
+		case "up":
 			if m.rowIdx > 0 {
 				m.rowIdx--
 			}
-		case "down", "j":
+		case "down":
 			if m.rowIdx < len(snapshot.Stats.Events)-1 {
 				m.rowIdx++
 			}

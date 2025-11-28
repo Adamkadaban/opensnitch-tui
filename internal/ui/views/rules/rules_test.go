@@ -17,6 +17,7 @@ type fakeRuleController struct {
 	action   string
 	nodeID   string
 	ruleName string
+	rule     state.Rule
 	err      error
 }
 
@@ -38,6 +39,14 @@ func (f *fakeRuleController) DeleteRule(nodeID, ruleName string) error {
 	f.action = "delete"
 	f.nodeID = nodeID
 	f.ruleName = ruleName
+	return f.err
+}
+
+func (f *fakeRuleController) ChangeRule(nodeID string, rule state.Rule) error {
+	f.action = "change"
+	f.nodeID = nodeID
+	f.ruleName = rule.Name
+	f.rule = rule
 	return f.err
 }
 
@@ -89,6 +98,50 @@ func TestRulesDeleteAction(t *testing.T) {
 	}
 }
 
+func TestRulesModifyAction(t *testing.T) {
+	store := state.NewStore()
+	store.SetNodes([]state.Node{{ID: "node-1", Name: "alpha", Address: "10.0.0.2"}})
+	store.SetRules("node-1", []state.Rule{{Name: "ssh", Action: "allow", Duration: "once", Description: "orig"}})
+	ctrl := &fakeRuleController{}
+	view := New(store, theme.New(theme.Options{}), ctrl)
+	view.SetSize(80, 25)
+
+	view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if ctrl.action != "change" || ctrl.ruleName != "ssh" {
+		t.Fatalf("expected change action for ssh, got %+v", ctrl)
+	}
+}
+
+func TestRulesModifyNavigateFieldsWithArrows(t *testing.T) {
+	store := state.NewStore()
+	store.SetNodes([]state.Node{{ID: "node-1", Name: "alpha", Address: "10.0.0.2"}})
+	store.SetRules("node-1", []state.Rule{{Name: "ssh", Action: "allow"}})
+	ctrl := &fakeRuleController{}
+	view := New(store, theme.New(theme.Options{}), ctrl)
+	view.SetSize(80, 25)
+
+	view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m, ok := view.(*Model)
+	if !ok {
+		t.Fatalf("expected *Model, got %T", view)
+	}
+	if m.editFocus != 0 {
+		t.Fatalf("expected initial editFocus 0, got %d", m.editFocus)
+	}
+	// Up from first wraps to last
+	view.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.editFocus != editFieldCount-1 {
+		t.Fatalf("expected editFocus wrap to last, got %d", m.editFocus)
+	}
+	// Down moves back to first
+	view.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.editFocus != 0 {
+		t.Fatalf("expected editFocus move to 0, got %d", m.editFocus)
+	}
+}
+
 func TestRulesTableWindowing(t *testing.T) {
 	store := state.NewStore()
 	node := state.Node{ID: "node-1", Name: "alpha"}
@@ -109,7 +162,7 @@ func TestRulesTableWindowing(t *testing.T) {
 	}
 
 	for i := 0; i < 7; i++ {
-		view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		view.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
 
 	out := view.View()

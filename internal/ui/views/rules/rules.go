@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -30,6 +31,15 @@ type Model struct {
 	tableMaxWidth int
 
 	statusLine string
+
+	editing        bool
+	editFocus      int
+	editInputs     []textinput.Model
+	editRuleName   string
+	editActionIdx  int
+	editDurIdx     int
+	editNoLog      bool
+	editPrecedence bool
 }
 
 const (
@@ -47,6 +57,35 @@ const (
 	minNoLogWidth      = 6
 	minOperatorWidth   = 14
 )
+
+const (
+	editFieldDescription = iota
+	editFieldAction
+	editFieldDuration
+	editFieldNoLog
+	editFieldPrecedence
+	editFieldCount
+)
+
+type option struct {
+	label string
+	value string
+}
+
+var editLabels = []string{"Description", "Action", "Duration", "NoLog", "Precedence"}
+var editPlaceholders = []string{"", "allow|deny|ask", "always|once|until restart", "yes/no", "yes/no"}
+
+var ruleActionOptions = []option{
+	{label: "Allow", value: "allow"},
+	{label: "Deny", value: "deny"},
+	{label: "Ask", value: "ask"},
+}
+
+var ruleDurationOptions = []option{
+	{label: "Once", value: "once"},
+	{label: "Until restart", value: "until restart"},
+	{label: "Always", value: "always"},
+}
 
 type tableLayout struct {
 	cursor     int
@@ -77,14 +116,45 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch key := msg.(type) {
 	case tea.KeyMsg:
+		if m.editing {
+			switch key.Type {
+			case tea.KeyEsc:
+				m.cancelEdit()
+				return m, nil
+			case tea.KeyEnter:
+				m.submitEdit(snapshot)
+				return m, nil
+			case tea.KeyTab:
+				m.cycleEditFocus(1)
+				return m, nil
+			case tea.KeyShiftTab:
+				m.cycleEditFocus(-1)
+				return m, nil
+			}
+			switch key.String() {
+			case "up":
+				m.cycleEditFocus(-1)
+				return m, nil
+			case "down":
+				m.cycleEditFocus(1)
+				return m, nil
+			case "left":
+				m.adjustEditSelection(-1)
+				return m, nil
+			case "right":
+				m.adjustEditSelection(1)
+				return m, nil
+			}
+			var cmd tea.Cmd
+			if m.editFocus == editFieldDescription && len(m.editInputs) > 0 {
+				m.editInputs[0], cmd = m.editInputs[0].Update(msg)
+			}
+			return m, cmd
+		}
 		switch key.String() {
 		case "left":
 			m.adjustTableX(-4)
 		case "right":
-			m.adjustTableX(4)
-		case "h":
-			m.adjustTableX(-4)
-		case "l":
 			m.adjustTableX(4)
 		case "[":
 			if m.nodeIdx > 0 {
@@ -101,11 +171,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tableOffset = 0
 				m.tableXOffset = 0
 			}
-		case "up", "k":
+		case "up":
 			if m.ruleIdx > 0 {
 				m.ruleIdx--
 			}
-		case "down", "j":
+		case "down":
 			if _, rules, ok := m.current(snapshot); ok && m.ruleIdx < len(rules)-1 {
 				m.ruleIdx++
 			}
@@ -115,6 +185,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.requestToggle(snapshot, false)
 		case "x", "delete":
 			m.requestDelete(snapshot)
+		case "m":
+			m.startEdit(snapshot)
 		}
 	}
 
@@ -139,10 +211,15 @@ func (m *Model) View() string {
 
 	header := m.renderNodes(snapshot)
 	table := m.renderRulesTable(rules)
-	detail := m.renderRuleDetail(rules)
+	var content string
+	if m.editing {
+		content = m.renderEditModal(rules)
+	} else {
+		content = m.renderRuleDetail(rules)
+	}
 	status := m.renderStatus()
 
-	body := lipgloss.JoinVertical(lipgloss.Left, header, table, detail, status)
+	body := lipgloss.JoinVertical(lipgloss.Left, header, table, content, status)
 	return m.wrap(body)
 }
 
@@ -302,12 +379,185 @@ func (m *Model) renderRuleDetail(rules []state.Rule) string {
 	return m.theme.Body.Render(strings.Join(lines, "\n"))
 }
 
-func (m *Model) renderStatus() string {
-	help := m.theme.Subtle.Render("←/→ scroll · [/] nodes · ↑/↓ rules · e enable · d disable · x delete")
-	if m.statusLine == "" {
-		return help
+func (m *Model) renderEditModal(rules []state.Rule) string {
+	name := ""
+	if len(rules) > 0 && m.ruleIdx < len(rules) {
+		name = rules[m.ruleIdx].Name
 	}
-	return fmt.Sprintf("%s\n%s", m.statusLine, help)
+	header := m.theme.Header.Render(fmt.Sprintf("Modify rule %s", util.Fallback(name, "-")))
+	rows := []string{
+		m.renderEditInput("Description", m.editInputs, m.editFocus == editFieldDescription),
+		m.renderEditRow("Action", ruleActionOptions, m.editActionIdx, m.editFocus == editFieldAction),
+		m.renderEditRow("Duration", ruleDurationOptions, m.editDurIdx, m.editFocus == editFieldDuration),
+		m.renderEditToggle("NoLog", m.editNoLog, m.editFocus == editFieldNoLog),
+		m.renderEditToggle("Precedence", m.editPrecedence, m.editFocus == editFieldPrecedence),
+	}
+	body := strings.Join(rows, "\n")
+	return m.theme.Body.Render(fmt.Sprintf("%s\n%s", header, body))
+}
+
+func (m *Model) renderEditInput(label string, inputs []textinput.Model, focused bool) string {
+	if len(inputs) == 0 {
+		return fmt.Sprintf("%s: -", label)
+	}
+	ti := inputs[0]
+	if focused {
+		ti.Prompt = m.theme.Warning.Render("> ")
+	} else {
+		ti.Prompt = "  "
+	}
+	return fmt.Sprintf("%s: %s", label, ti.View())
+}
+
+func (m *Model) renderEditToggle(label string, enabled bool, focused bool) string {
+	options := []option{{label: "Off", value: "off"}, {label: "On", value: "on"}}
+	idx := 0
+	if enabled {
+		idx = 1
+	}
+	return m.renderEditRow(label, options, idx, focused)
+}
+
+func (m *Model) renderEditRow(label string, opts []option, selected int, focused bool) string {
+	cells := make([]string, len(opts))
+	for idx, opt := range opts {
+		style := m.theme.TabInactive
+		marker := " "
+		if idx == selected {
+			style = m.theme.TabActive
+			if focused {
+				style = style.Underline(true).Bold(true)
+				marker = m.theme.Warning.Render(">")
+			}
+		} else if focused {
+			style = style.Faint(true)
+		}
+		cells[idx] = fmt.Sprintf("%s%s", marker, style.Render(opt.label))
+	}
+	return fmt.Sprintf("%s %s", m.theme.Header.Render(label+":"), strings.Join(cells, " "))
+}
+
+func (m *Model) startEdit(snapshot state.Snapshot) {
+	_, rules, ok := m.current(snapshot)
+	if !ok || len(rules) == 0 {
+		return
+	}
+	if m.controller == nil {
+		m.statusLine = m.theme.Danger.Render("Rules controller unavailable")
+		return
+	}
+	rule := rules[min(m.ruleIdx, len(rules)-1)]
+	inputs := make([]textinput.Model, 1)
+	desc := textinput.New()
+	desc.Placeholder = editPlaceholders[editFieldDescription]
+	desc.CharLimit = 0
+	desc.Width = 40
+	desc.SetValue(rule.Description)
+	desc.Focus()
+	inputs[0] = desc
+	m.editInputs = inputs
+	m.editFocus = editFieldDescription
+	m.editRuleName = rule.Name
+	m.editActionIdx = indexOfValue(ruleActionOptions, strings.ToLower(rule.Action))
+	m.editDurIdx = indexOfValue(ruleDurationOptions, strings.ToLower(rule.Duration))
+	m.editNoLog = rule.NoLog
+	m.editPrecedence = rule.Precedence
+	m.editing = true
+}
+
+func (m *Model) cancelEdit() {
+	m.editing = false
+	m.editInputs = nil
+	m.editRuleName = ""
+	m.editActionIdx = 0
+	m.editDurIdx = 0
+	m.editNoLog = false
+	m.editPrecedence = false
+}
+
+func (m *Model) cycleEditFocus(delta int) {
+	if editFieldCount == 0 {
+		return
+	}
+	if m.editFocus == editFieldDescription && len(m.editInputs) > 0 {
+		m.editInputs[0].Blur()
+	}
+	m.editFocus = (m.editFocus + delta) % editFieldCount
+	if m.editFocus < 0 {
+		m.editFocus += editFieldCount
+	}
+	if m.editFocus == editFieldDescription && len(m.editInputs) > 0 {
+		m.editInputs[0].Focus()
+	}
+}
+
+func (m *Model) adjustEditSelection(delta int) {
+	if delta == 0 {
+		return
+	}
+	switch m.editFocus {
+	case editFieldAction:
+		m.editActionIdx = wrapIndex(m.editActionIdx+delta, len(ruleActionOptions))
+	case editFieldDuration:
+		m.editDurIdx = wrapIndex(m.editDurIdx+delta, len(ruleDurationOptions))
+	case editFieldNoLog:
+		m.editNoLog = !m.editNoLog
+	case editFieldPrecedence:
+		m.editPrecedence = !m.editPrecedence
+	}
+}
+
+func (m *Model) submitEdit(snapshot state.Snapshot) {
+	node, rules, ok := m.current(snapshot)
+	if !ok || len(rules) == 0 {
+		return
+	}
+	if m.controller == nil {
+		m.statusLine = m.theme.Danger.Render("Rules controller unavailable")
+		return
+	}
+	var rule state.Rule
+	for _, r := range rules {
+		if r.Name == m.editRuleName {
+			rule = r
+			break
+		}
+	}
+	if rule.Name == "" {
+		m.statusLine = m.theme.Danger.Render("Rule not found")
+		return
+	}
+	desc := ""
+	if len(m.editInputs) > 0 {
+		desc = strings.TrimSpace(m.editInputs[0].Value())
+	}
+	rule.Description = desc
+	rule.Action = ruleActionOptions[wrapIndex(m.editActionIdx, len(ruleActionOptions))].value
+	rule.Duration = ruleDurationOptions[wrapIndex(m.editDurIdx, len(ruleDurationOptions))].value
+	rule.NoLog = m.editNoLog
+	rule.Precedence = m.editPrecedence
+	if rule.NodeID == "" {
+		rule.NodeID = node.ID
+	}
+	err := m.controller.ChangeRule(rule.NodeID, rule)
+	m.renderActionResult(err, "change", node, rule)
+	if err == nil {
+		m.cancelEdit()
+	}
+}
+
+func (m *Model) renderStatus() string {
+	var help string
+	if m.editing {
+		help = "esc cancel · enter save · tab/shift+tab · ←/→ change"
+	} else {
+		help = "←/→ scroll · [/] nodes · ↑/↓ rules · e enable · d disable · x delete · m modify"
+	}
+	helpRendered := m.theme.Subtle.Render(help)
+	if m.statusLine == "" {
+		return helpRendered
+	}
+	return fmt.Sprintf("%s\n%s", m.statusLine, helpRendered)
 }
 
 func (m *Model) wrap(body string) string {
@@ -419,6 +669,28 @@ func (m *Model) tableColumns() tableLayout {
 	layout.noLog = max(minNoLogWidth, layout.noLog)
 	layout.operator = max(4, layout.operator)
 	return layout
+}
+
+// wrapIndex keeps i within [0,n).
+func wrapIndex(i, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	i %= n
+	if i < 0 {
+		i += n
+	}
+	return i
+}
+
+func indexOfValue(opts []option, v string) int {
+	v = strings.ToLower(v)
+	for i, o := range opts {
+		if strings.ToLower(o.value) == v {
+			return i
+		}
+	}
+	return 0
 }
 
 func (m *Model) adjustTableX(delta int) {
@@ -582,6 +854,24 @@ func boolLabel(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func boolToYesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func parseBoolInput(s string) (bool, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "y", "yes", "true", "1":
+		return true, true
+	case "n", "no", "false", "0":
+		return false, true
+	}
+	return false, false
 }
 
 func stripBackground(style lipgloss.Style) lipgloss.Style {

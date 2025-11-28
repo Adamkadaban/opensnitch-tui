@@ -411,6 +411,19 @@ func (s *Server) DeleteRule(nodeID, ruleName string) error {
 	return nil
 }
 
+func (s *Server) ChangeRule(nodeID string, rule state.Rule) error {
+	if rule.Name == "" {
+		return errors.New("rule name required")
+	}
+	notif := s.newNotification(pb.Action_CHANGE_RULE, nodeID)
+	notif.Rules = []*pb.Rule{serializeRule(rule)}
+	if err := s.sendNotification(nodeID, notif); err != nil {
+		return err
+	}
+	s.store.UpdateRule(nodeID, rule.Name, func(r *state.Rule) { *r = rule })
+	return nil
+}
+
 func (s *Server) enqueueRuleAction(nodeID, ruleName string, action pb.Action, mutate func(*state.Rule)) error {
 	rule, err := s.lookupRule(nodeID, ruleName)
 	if err != nil {

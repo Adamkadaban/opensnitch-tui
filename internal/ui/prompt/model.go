@@ -354,10 +354,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			case "tab", "shift+tab":
 				// let global tab navigation (view switching) work while inspecting
 				return nil, false
-			case "up", "k", "ctrl+b", "pgup":
+			case "up", "ctrl+b", "pgup":
 				m.inspectVP.LineUp(1)
 				return nil, true
-			case "down", "j", "ctrl+f", "pgdown":
+			case "down", "ctrl+f", "pgdown":
 				m.inspectVP.LineDown(1)
 				return nil, true
 			case "g":
@@ -380,19 +380,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			local := isLocalNode(snapshot.Nodes, prompt.NodeID)
 			cmd := m.toggleInspect(prompt, snapshot.Settings, local)
 			return cmd, true
-		case "down", "j":
+		case "down":
 			m.focus = (m.focus + 1) % 3
 			return nil, true
-		case "up", "k":
+		case "up":
 			m.focus--
 			if m.focus < 0 {
 				m.focus = fieldTarget
 			}
 			return nil, true
-		case "left", "h":
+		case "left":
 			m.stepSelection(-1, form, len(targets))
 			return nil, true
-		case "right", "l":
+		case "right":
 			m.stepSelection(1, form, len(targets))
 			return nil, true
 		case "a":
