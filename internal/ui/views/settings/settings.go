@@ -213,7 +213,7 @@ func (m *Model) View() string {
 		m.renderSection("General", general),
 		m.renderSection("Alerts", alerts),
 		m.renderSection("Security", security),
-		m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter save all · s save focused"),
+		m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter save all"),
 	}
 	if m.status != "" {
 		body = append(body, m.status)
@@ -238,33 +238,6 @@ func (m *Model) syncSelection() {
 	m.pauseOnInspect = snapshot.Settings.PausePromptOnInspect
 	m.yaraEnabled = snapshot.Settings.YaraEnabled
 	m.yaraRuleDir.SetValue(snapshot.Settings.YaraRuleDir)
-}
-
-func (m *Model) persistFocused() {
-	if m.controller == nil {
-		m.status = m.theme.Danger.Render("Settings controller unavailable")
-		return
-	}
-	switch m.focus {
-	case fieldTheme:
-		m.persistTheme()
-	case fieldAction:
-		m.persistAction()
-	case fieldDuration:
-		m.persistDuration()
-	case fieldTarget:
-		m.persistTarget()
-	case fieldPromptTimeout:
-		m.persistPromptTimeout()
-	case fieldAlertsInterrupt:
-		m.persistAlertsInterrupt()
-	case fieldPauseOnInspect:
-		m.persistPauseOnInspect()
-	case fieldYaraEnabled:
-		m.persistYaraEnabled()
-	case fieldYaraRuleDir:
-		m.persistYaraRuleDir()
-	}
 }
 
 func (m *Model) persistAll() {
