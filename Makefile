@@ -19,3 +19,9 @@ lint:
 .PHONY: run
 run:
 	$(GO) run $(CMD) $(ARGS)
+
+.PHONY: proto
+proto:
+	protoc -I references/opensnitch/proto references/opensnitch/proto/ui.proto \
+		--go_out internal/pb/protocol --go-grpc_out internal/pb/protocol \
+		--go_opt=paths=source_relative --go-grpc_opt=paths=source_relative
