@@ -229,7 +229,7 @@ func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
 	widths := []int{layout.cursor, layout.name, layout.action, layout.duration, layout.status, layout.precedence, layout.noLog, layout.operator}
 	cells := make([]string, len(labels))
 	for i := range labels {
-		cells[i] = padAndStyle(headerStyle, labels[i], widths[i])
+		cells[i] = padAndStyle(headerStyle, labels[i], widths[i], true)
 	}
 	return strings.Join(cells, gap)
 }
@@ -258,14 +258,14 @@ func (m *Model) renderRuleRow(layout tableLayout, rule state.Rule, rowIdx int, s
 		statusStyle = statusEnabled
 	}
 	cells := []string{
-		padAndStyle(cursorStyle, cursor, layout.cursor),
-		padAndStyle(nameStyle, rule.Name, layout.name),
-		padAndStyle(actionStyle, rule.Action, layout.action),
-		padAndStyle(durationStyle, rule.Duration, layout.duration),
-		padAndStyle(statusStyle, statusLabel, layout.status),
-		padAndStyle(flagStyle, boolLabel(rule.Precedence), layout.precedence),
-		padAndStyle(flagStyle, boolLabel(rule.NoLog), layout.noLog),
-		padAndStyle(operatorStyle, describeOperator(rule.Operator), layout.operator),
+		padAndStyle(cursorStyle, cursor, layout.cursor, true),
+		padAndStyle(nameStyle, rule.Name, layout.name, true),
+		padAndStyle(actionStyle, rule.Action, layout.action, true),
+		padAndStyle(durationStyle, rule.Duration, layout.duration, true),
+		padAndStyle(statusStyle, statusLabel, layout.status, true),
+		padAndStyle(flagStyle, boolLabel(rule.Precedence), layout.precedence, true),
+		padAndStyle(flagStyle, boolLabel(rule.NoLog), layout.noLog, true),
+		padAndStyle(operatorStyle, describeOperator(rule.Operator), layout.operator, false),
 	}
 	gapStyle := lipgloss.NewStyle().Background(bg)
 	rowGap := gapStyle.Render(gap)
@@ -450,13 +450,16 @@ func (m *Model) contentWidth() int {
 	return m.width - 4
 }
 
-func padAndStyle(style lipgloss.Style, text string, width int) string {
+func padAndStyle(style lipgloss.Style, text string, width int, truncate bool) string {
 	if width <= 0 {
 		return ""
 	}
 	content := text
-	if util.RuneWidth(text) < width {
-		content = util.PadString(text, width)
+	if truncate {
+		content = util.TruncateString(text, width)
+	}
+	if util.RuneWidth(content) < width {
+		content = util.PadString(content, width)
 	}
 	return style.Render(content)
 }
