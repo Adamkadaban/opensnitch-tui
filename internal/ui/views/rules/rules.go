@@ -23,9 +23,11 @@ type Model struct {
 	width  int
 	height int
 
-	nodeIdx     int
-	ruleIdx     int
-	tableOffset int
+	nodeIdx       int
+	ruleIdx       int
+	tableOffset   int
+	tableXOffset  int
+	tableMaxWidth int
 
 	statusLine string
 }
@@ -76,18 +78,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch key := msg.(type) {
 	case tea.KeyMsg:
 		switch key.String() {
-		case "left", "h":
+		case "left":
+			m.adjustTableX(-4)
+		case "right":
+			m.adjustTableX(4)
+		case "h":
+			m.adjustTableX(-4)
+		case "l":
+			m.adjustTableX(4)
+		case "[":
 			if m.nodeIdx > 0 {
 				m.nodeIdx--
 				m.ruleIdx = 0
 				m.tableOffset = 0
+				m.tableXOffset = 0
 			}
-		case "right", "l":
+		case "]":
 			nodes := snapshot.Nodes
 			if len(nodes) > 0 && m.nodeIdx < len(nodes)-1 {
 				m.nodeIdx++
 				m.ruleIdx = 0
 				m.tableOffset = 0
+				m.tableXOffset = 0
 			}
 		case "up", "k":
 			if m.ruleIdx > 0 {
@@ -178,7 +190,20 @@ func (m *Model) renderRulesTable(rules []state.Rule) string {
 		tableWidth := layout.total() + columnGap*(layout.count()-1)
 		rows = append(rows, renderCaretRow(tableWidth, m.theme.Subtle))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	// compute max width and apply horizontal slicing
+	maxWidth := 0
+	for _, row := range rows {
+		if w := util.RuneWidth(row); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	m.tableMaxWidth = maxWidth
+	visibleWidth := max(1, m.contentWidth())
+	clipped := make([]string, len(rows))
+	for i, row := range rows {
+		clipped[i] = util.AnsiSlice(row, m.tableXOffset, visibleWidth)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, clipped...)
 }
 
 func renderCaretRow(width int, style lipgloss.Style) string {
@@ -278,7 +303,7 @@ func (m *Model) renderRuleDetail(rules []state.Rule) string {
 }
 
 func (m *Model) renderStatus() string {
-	help := m.theme.Subtle.Render("←/→ nodes · ↑/↓ rules · e enable · d disable · x delete")
+	help := m.theme.Subtle.Render("←/→ scroll · [/] nodes · ↑/↓ rules · e enable · d disable · x delete")
 	if m.statusLine == "" {
 		return help
 	}
@@ -396,6 +421,25 @@ func (m *Model) tableColumns() tableLayout {
 	return layout
 }
 
+func (m *Model) adjustTableX(delta int) {
+	if delta == 0 {
+		return
+	}
+	maxOffset := 0
+	visible := m.contentWidth()
+	if m.tableMaxWidth > visible {
+		maxOffset = m.tableMaxWidth - visible
+	}
+	newOffset := m.tableXOffset + delta
+	if newOffset < 0 {
+		newOffset = 0
+	}
+	if newOffset > maxOffset {
+		newOffset = maxOffset
+	}
+	m.tableXOffset = newOffset
+}
+
 func (m *Model) contentWidth() int {
 	if m.width <= 0 {
 		return 80
@@ -410,7 +454,10 @@ func padAndStyle(style lipgloss.Style, text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	content := util.PadString(util.TruncateString(text, width), width)
+	content := text
+	if util.RuneWidth(text) < width {
+		content = util.PadString(text, width)
+	}
 	return style.Render(content)
 }
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -256,7 +257,7 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 			s.store.RemovePrompt(req.id)
 			s.store.SetError(fmt.Sprintf("prompt timed out for %s", displayConnectionLabel(prompt.Connection)))
 			decision := s.defaultPromptDecision(prompt)
-			rule, err := buildRuleFromDecision(prompt, decision)
+			rule, err := s.buildRuleFromDecision(prompt, decision)
 			if err == nil {
 				stateRule := convertRule(rule, prompt.NodeID)
 				s.store.AddRule(prompt.NodeID, stateRule)
@@ -473,7 +474,7 @@ func (s *Server) ResolvePrompt(decision controller.PromptDecision) error {
 	if req == nil {
 		return fmt.Errorf("prompt %s not found", decision.PromptID)
 	}
-	rule, err := buildRuleFromDecision(req.prompt, decision)
+	rule, err := s.buildRuleFromDecision(req.prompt, decision)
 	if err != nil {
 		return err
 	}
@@ -594,7 +595,7 @@ func (s *Server) defaultPromptDecision(prompt state.Prompt) controller.PromptDec
 	return decision
 }
 
-func buildRuleFromDecision(prompt state.Prompt, decision controller.PromptDecision) (*pb.Rule, error) {
+func (s *Server) buildRuleFromDecision(prompt state.Prompt, decision controller.PromptDecision) (*pb.Rule, error) {
 	decision.Action = normalizePromptAction(decision.Action)
 	decision.Duration = normalizePromptDuration(decision.Duration)
 	if decision.Target == "" {
@@ -604,14 +605,151 @@ func buildRuleFromDecision(prompt state.Prompt, decision controller.PromptDecisi
 	if err != nil {
 		return nil, err
 	}
+	name := generateRuleName(prompt, operator, decision.Action, decision.Duration, decision.Target, s.store)
 	return &pb.Rule{
 		Created:  time.Now().Unix(),
-		Name:     fmt.Sprintf("user-%d", time.Now().UnixNano()),
+		Name:     name,
 		Enabled:  true,
 		Action:   string(decision.Action),
 		Duration: string(decision.Duration),
 		Operator: operator,
 	}, nil
+}
+
+var nonSlugChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func generateRuleName(prompt state.Prompt, op *pb.Operator, action controller.PromptAction, duration controller.PromptDuration, target controller.PromptTarget, store *state.Store) string {
+	parts := []string{}
+	if s := slugify(string(action)); s != "" {
+		parts = append(parts, s)
+	}
+	if s := slugify(string(duration)); s != "" {
+		parts = append(parts, s)
+	}
+	if op != nil {
+		if t := slugify(op.Type); t != "" {
+			parts = append(parts, t)
+		}
+		if operand := operandSlug(op, prompt.Connection, target); operand != "" {
+			parts = append(parts, operand)
+		}
+	} else {
+		if operand := operandSlug(nil, prompt.Connection, target); operand != "" {
+			parts = append(parts, operand)
+		}
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "rule")
+	}
+	base := strings.Join(parts, "-")
+	return ensureUniqueRuleName(base, prompt.NodeID, store)
+}
+
+func operandSlug(op *pb.Operator, conn state.Connection, target controller.PromptTarget) string {
+	if op != nil {
+		if op.Data != "" {
+			return slugify(op.Data)
+		}
+		if len(op.List) > 0 {
+			return "list"
+		}
+		switch op.Operand {
+		case operandProcessPath:
+			if conn.ProcessPath != "" {
+				return slugify(conn.ProcessPath)
+			}
+		case operandProcessCmd:
+			cmdLine := strings.TrimSpace(strings.Join(conn.ProcessArgs, " "))
+			if cmdLine != "" {
+				return slugify(cmdLine)
+			}
+			if conn.ProcessPath != "" {
+				return slugify(conn.ProcessPath)
+			}
+		case operandDestHost:
+			if conn.DstHost != "" {
+				host := conn.DstHost
+				if conn.DstPort != 0 {
+					host = fmt.Sprintf("%s-%d", host, conn.DstPort)
+				}
+				return slugify(host)
+			}
+		case operandDestIP:
+			if conn.DstIP != "" {
+				ip := conn.DstIP
+				if conn.DstPort != 0 {
+					ip = fmt.Sprintf("%s-%d", ip, conn.DstPort)
+				}
+				return slugify(ip)
+			}
+		case operandDestPort:
+			if conn.DstPort != 0 {
+				return slugify(fmt.Sprintf("%d", conn.DstPort))
+			}
+		}
+	}
+	switch target {
+	case controller.PromptTargetProcessPath:
+		return slugify(conn.ProcessPath)
+	case controller.PromptTargetProcessCmd:
+		cmdLine := strings.TrimSpace(strings.Join(conn.ProcessArgs, " "))
+		if cmdLine != "" {
+			return slugify(cmdLine)
+		}
+		return slugify(conn.ProcessPath)
+	case controller.PromptTargetDestinationHost:
+		host := conn.DstHost
+		if conn.DstPort != 0 {
+			host = fmt.Sprintf("%s-%d", host, conn.DstPort)
+		}
+		return slugify(host)
+	case controller.PromptTargetDestinationIP:
+		ip := conn.DstIP
+		if conn.DstPort != 0 {
+			ip = fmt.Sprintf("%s-%d", ip, conn.DstPort)
+		}
+		return slugify(ip)
+	case controller.PromptTargetDestinationPort:
+		if conn.DstPort != 0 {
+			return slugify(fmt.Sprintf("%d", conn.DstPort))
+		}
+	case controller.PromptTargetUserID:
+		if conn.UserID != 0 {
+			return slugify(fmt.Sprintf("uid-%d", conn.UserID))
+		}
+	case controller.PromptTargetProcessID:
+		if conn.ProcessID != 0 {
+			return slugify(fmt.Sprintf("pid-%d", conn.ProcessID))
+		}
+	}
+	return ""
+}
+
+func slugify(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = nonSlugChars.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-._")
+	return s
+}
+
+func ensureUniqueRuleName(base string, nodeID string, store *state.Store) string {
+	if store == nil {
+		return base
+	}
+	existing := map[string]struct{}{}
+	for _, r := range store.Snapshot().Rules[nodeID] {
+		existing[r.Name] = struct{}{}
+	}
+	if _, ok := existing[base]; !ok {
+		return base
+	}
+	for i := 1; i < 1000; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if _, ok := existing[candidate]; !ok {
+			return candidate
+		}
+	}
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
 }
 
 func operatorForTarget(conn state.Connection, target controller.PromptTarget) (*pb.Operator, error) {

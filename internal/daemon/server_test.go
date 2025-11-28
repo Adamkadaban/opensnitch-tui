@@ -221,6 +221,34 @@ func TestPauseResumePromptUpdatesStore(t *testing.T) {
 	}
 }
 
+func TestRuleNameGeneration(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	node := state.Node{ID: "node-1", Name: "alpha"}
+	store.SetNodes([]state.Node{node})
+	store.SetRules(node.ID, []state.Rule{{Name: "allow-curl"}})
+	prompt := state.Prompt{
+		ID:     "p1",
+		NodeID: node.ID,
+		Connection: state.Connection{
+			ProcessPath: "/usr/bin/curl",
+		},
+	}
+	decision := controller.PromptDecision{
+		PromptID: prompt.ID,
+		Action:   controller.PromptActionAllow,
+		Duration: controller.PromptDurationAlways,
+		Target:   controller.PromptTargetProcessPath,
+	}
+	rule, err := srv.buildRuleFromDecision(prompt, decision)
+	if err != nil {
+		t.Fatalf("buildRuleFromDecision error: %v", err)
+	}
+	if rule.Name != "allow-always-simple-usr-bin-curl" {
+		t.Fatalf("expected generated name 'allow-always-simple-usr-bin-curl', got %q", rule.Name)
+	}
+}
+
 func TestServerAskRuleTimeoutAddsRule(t *testing.T) {
 	store := state.NewStore()
 	nodeAddr := "1.2.3.4:6000"
