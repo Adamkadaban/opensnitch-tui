@@ -1,6 +1,10 @@
 package daemon
 
 import (
+	"fmt"
+	"os"
+	"os/user"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,5 +80,25 @@ func TestConvertStatsPopulated(t *testing.T) {
 	}
 	if len(stats.TopExecutables) != 2 || stats.TopExecutables[0].Label != "ssh" {
 		t.Fatalf("expected executables sorted, got %+v", stats.TopExecutables)
+	}
+}
+
+func TestTopUsersResolvesUsernames(t *testing.T) {
+	uid := fmt.Sprintf("%d", os.Getuid())
+	uinfo, err := user.LookupId(uid)
+	if err != nil || uinfo == nil || uinfo.Username == "" {
+		t.Skip("current user lookup failed; skipping username resolution test")
+	}
+	proto := &pb.Statistics{ByUid: map[string]uint64{uid: 5}}
+	stats := convertStats(proto, "node", "node")
+	if len(stats.TopUsers) == 0 {
+		t.Fatalf("expected TopUsers, got none")
+	}
+	label := stats.TopUsers[0].Label
+	if label == uid {
+		t.Fatalf("expected username in label, got %q", label)
+	}
+	if !strings.Contains(label, uinfo.Username) {
+		t.Fatalf("expected label to contain username %q, got %q", uinfo.Username, label)
 	}
 }

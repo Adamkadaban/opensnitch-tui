@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"fmt"
+	"os/user"
 	"sort"
 	"time"
 
@@ -31,6 +33,7 @@ func convertStats(stats *pb.Statistics, nodeID, nodeName string) state.Stats {
 		TopDestHosts:   topBuckets(stats.GetByHost(), 5),
 		TopDestPorts:   topBuckets(stats.GetByPort(), 5),
 		TopExecutables: topBuckets(stats.GetByExecutable(), 5),
+		TopUsers:       topUserBuckets(stats.GetByUid(), 5),
 		UpdatedAt:      time.Now(),
 	}
 }
@@ -59,4 +62,19 @@ func topBuckets(values map[string]uint64, size int) []state.StatBucket {
 		buckets = buckets[:size]
 	}
 	return buckets
+}
+
+func topUserBuckets(values map[string]uint64, size int) []state.StatBucket {
+	if len(values) == 0 || size <= 0 {
+		return nil
+	}
+	remapped := make(map[string]uint64, len(values))
+	for uid, val := range values {
+		label := uid
+		if u, err := user.LookupId(uid); err == nil && u != nil && u.Username != "" {
+			label = fmt.Sprintf("%s (%s)", u.Username, uid)
+		}
+		remapped[label] = val
+	}
+	return topBuckets(remapped, size)
 }

@@ -427,6 +427,7 @@ func cloneStats(stats Stats) Stats {
 	stats.TopDestHosts = cloneBuckets(stats.TopDestHosts)
 	stats.TopDestPorts = cloneBuckets(stats.TopDestPorts)
 	stats.TopExecutables = cloneBuckets(stats.TopExecutables)
+	stats.TopUsers = cloneBuckets(stats.TopUsers)
 	return stats
 }
 

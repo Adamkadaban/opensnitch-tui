@@ -60,6 +60,7 @@ type Stats struct {
 	TopDestHosts   []StatBucket
 	TopDestPorts   []StatBucket
 	TopExecutables []StatBucket
+	TopUsers       []StatBucket
 	UpdatedAt      time.Time
 }
 

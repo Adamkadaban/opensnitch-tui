@@ -51,10 +51,12 @@ func (m *Model) View() string {
 	row := lipgloss.JoinHorizontal(lipgloss.Top, cards...)
 	trafficWidth := max(24, m.width/3)
 	insights := m.renderTraffic(stats, trafficWidth)
+	colWidth := max(20, m.width/4)
 	secondary := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderTopList("Top destinations", stats.TopDestHosts, m.width/3),
-		m.renderTopList("Top ports", stats.TopDestPorts, m.width/3),
-		m.renderTopList("Top executables", stats.TopExecutables, m.width/3),
+		m.renderTopList("Top destinations", stats.TopDestHosts, colWidth),
+		m.renderTopList("Top ports", stats.TopDestPorts, colWidth),
+		m.renderTopList("Top executables", stats.TopExecutables, colWidth),
+		m.renderTopList("Top users", stats.TopUsers, colWidth),
 	)
 	meta := m.theme.Subtle.Render(m.metaLine(stats))
 	body := lipgloss.JoinVertical(lipgloss.Left, row, insights, secondary, meta)
