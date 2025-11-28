@@ -31,7 +31,7 @@ func AnsiSlice(s string, offset, width int) string {
 	var b strings.Builder
 	visible := 0
 	started := false
-	lastSGR := ""
+	activeSGR := ""
 	for i := 0; i < len(s); {
 		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
 			j := i + 2
@@ -41,7 +41,11 @@ func AnsiSlice(s string, offset, width int) string {
 			if j < len(s) {
 				esc := s[i : j+1]
 				if esc[len(esc)-1] == 'm' {
-					lastSGR = esc
+					if isResetSGR(esc) {
+						activeSGR = ""
+					} else {
+						activeSGR = esc
+					}
 				}
 				if started {
 					b.WriteString(esc)
@@ -57,8 +61,8 @@ func AnsiSlice(s string, offset, width int) string {
 		if visible >= offset && visible < offset+width {
 			if !started {
 				started = true
-				if lastSGR != "" {
-					b.WriteString(lastSGR)
+				if activeSGR != "" {
+					b.WriteString(activeSGR)
 				}
 			}
 			b.WriteRune(r)
@@ -69,8 +73,28 @@ func AnsiSlice(s string, offset, width int) string {
 			break
 		}
 	}
+	if started && activeSGR != "" {
+		b.WriteString("\x1b[0m")
+	}
 	return b.String()
 }
 
 // RuneWidth returns the number of runes in s excluding ANSI sequences.
 func RuneWidth(s string) int { return len([]rune(StripANSI(s))) }
+
+func isResetSGR(esc string) bool {
+	// esc is like "\x1b[...m"
+	if len(esc) < 3 || esc[len(esc)-1] != 'm' {
+		return false
+	}
+	contents := esc[2 : len(esc)-1] // between '[' and 'm'
+	if contents == "" {
+		return true
+	}
+	for _, part := range strings.Split(contents, ";") {
+		if part == "0" || part == "" {
+			return true
+		}
+	}
+	return false
+}
