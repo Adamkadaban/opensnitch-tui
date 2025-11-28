@@ -11,6 +11,7 @@ import (
 
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/components/table"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
 	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
@@ -158,22 +159,13 @@ func (m *Model) renderEventsTable(events []state.Event) string {
 	}
 	if moreBelow {
 		tableWidth := layout.total() + columnGap*(layout.count()-1)
-		rows = append(rows, renderCaretRow(tableWidth, m.theme.Subtle))
+		rows = append(rows, table.RenderCaretRow(tableWidth, m.theme.Subtle))
 	}
 
-	maxWidth := 0
-	for _, row := range rows {
-		if w := util.RuneWidth(row); w > maxWidth {
-			maxWidth = w
-		}
-	}
-	m.tableMaxWidth = maxWidth
+	m.tableMaxWidth = table.ComputeMaxWidth(rows)
 
 	visibleWidth := max(1, m.contentWidth())
-	clipped := make([]string, len(rows))
-	for i, row := range rows {
-		clipped[i] = util.AnsiSlice(row, m.tableXOffset, visibleWidth)
-	}
+	clipped := table.ClipRows(rows, m.tableXOffset, visibleWidth)
 	return lipgloss.JoinVertical(lipgloss.Left, clipped...)
 }
 
@@ -216,7 +208,7 @@ func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
 	widths := []int{layout.cursor, layout.time, layout.action, layout.dstIP, layout.dstHost, layout.proto, layout.process, layout.cmdline, layout.rule}
 	cells := make([]string, len(labels))
 	for i := range labels {
-		cells[i] = padAndStyle(headerStyle, labels[i], widths[i], true)
+		cells[i] = table.PadAndStyle(headerStyle, labels[i], widths[i], true)
 	}
 	return strings.Join(cells, gap)
 }
@@ -242,15 +234,15 @@ func (m *Model) renderEventRow(layout tableLayout, ev state.Event, rowIdx int, s
 	ruleStyle := stripBackground(m.theme.Body).Background(bg).Padding(0)
 
 	columns := []string{
-		padAndStyle(cursorStyle, cursor, layout.cursor, true),
-		padAndStyle(timeStyle, formatEventTime(ev), layout.time, true),
-		padAndStyle(actionStyle, formatEventAction(ev), layout.action, true),
-		padAndStyle(dstIPStyle, util.Fallback(ev.Connection.DstIP, "-"), layout.dstIP, true),
-		padAndStyle(dstHostStyle, util.Fallback(ev.Connection.DstHost, "-"), layout.dstHost, true),
-		padAndStyle(protoStyle, util.Fallback(ev.Connection.Protocol, "-"), layout.proto, true),
-		padAndStyle(processStyle, formatProcess(ev), layout.process, true),
-		padAndStyle(cmdlineStyle, formatCmdline(ev), layout.cmdline, true),
-		padAndStyle(ruleStyle, util.Fallback(ev.Rule.Name, "-"), layout.rule, true),
+		table.PadAndStyle(cursorStyle, cursor, layout.cursor, true),
+		table.PadAndStyle(timeStyle, formatEventTime(ev), layout.time, true),
+		table.PadAndStyle(actionStyle, formatEventAction(ev), layout.action, true),
+		table.PadAndStyle(dstIPStyle, util.Fallback(ev.Connection.DstIP, "-"), layout.dstIP, true),
+		table.PadAndStyle(dstHostStyle, util.Fallback(ev.Connection.DstHost, "-"), layout.dstHost, true),
+		table.PadAndStyle(protoStyle, util.Fallback(ev.Connection.Protocol, "-"), layout.proto, true),
+		table.PadAndStyle(processStyle, formatProcess(ev), layout.process, true),
+		table.PadAndStyle(cmdlineStyle, formatCmdline(ev), layout.cmdline, true),
+		table.PadAndStyle(ruleStyle, util.Fallback(ev.Rule.Name, "-"), layout.rule, true),
 	}
 
 	gapStyle := lipgloss.NewStyle().Background(bg)
@@ -349,23 +341,6 @@ func findNodeLabel(nodes []state.Node, nodeID string) string {
 		return "-"
 	}
 	return nodeID
-}
-
-func renderCaretRow(width int, style lipgloss.Style) string {
-	if width <= 0 {
-		width = 3
-	}
-	glyphs := make([]rune, width)
-	for i := range glyphs {
-		glyphs[i] = ' '
-	}
-	positions := []int{0, width / 2, max(0, width-1)}
-	for _, pos := range positions {
-		if pos >= 0 && pos < width {
-			glyphs[pos] = 'v'
-		}
-	}
-	return style.Render(string(glyphs))
 }
 
 func (m *Model) renderStatus() string {
@@ -517,20 +492,6 @@ func (m *Model) contentWidth() int {
 		return m.width
 	}
 	return m.width - 4
-}
-
-func padAndStyle(style lipgloss.Style, text string, width int, truncate bool) string {
-	if width <= 0 {
-		return ""
-	}
-	content := text
-	if truncate {
-		content = util.TruncateString(text, width)
-	}
-	if util.RuneWidth(content) < width {
-		content = util.PadString(content, width)
-	}
-	return style.Render(content)
 }
 
 func stripBackground(style lipgloss.Style) lipgloss.Style {

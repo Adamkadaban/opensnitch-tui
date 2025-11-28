@@ -12,6 +12,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/components/table"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
 	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
@@ -85,6 +86,16 @@ var ruleDurationOptions = []option{
 	{label: "Once", value: "once"},
 	{label: "Until restart", value: "until restart"},
 	{label: "Always", value: "always"},
+}
+
+func indexOfOption(opts []option, v string) int {
+	v = strings.ToLower(v)
+	for i, o := range opts {
+		if strings.ToLower(o.value) == v {
+			return i
+		}
+	}
+	return 0
 }
 
 type tableLayout struct {
@@ -265,39 +276,13 @@ func (m *Model) renderRulesTable(rules []state.Rule) string {
 	}
 	if moreBelow {
 		tableWidth := layout.total() + columnGap*(layout.count()-1)
-		rows = append(rows, renderCaretRow(tableWidth, m.theme.Subtle))
+		rows = append(rows, table.RenderCaretRow(tableWidth, m.theme.Subtle))
 	}
 	// compute max width and apply horizontal slicing
-	maxWidth := 0
-	for _, row := range rows {
-		if w := util.RuneWidth(row); w > maxWidth {
-			maxWidth = w
-		}
-	}
-	m.tableMaxWidth = maxWidth
+	m.tableMaxWidth = table.ComputeMaxWidth(rows)
 	visibleWidth := max(1, m.contentWidth())
-	clipped := make([]string, len(rows))
-	for i, row := range rows {
-		clipped[i] = util.AnsiSlice(row, m.tableXOffset, visibleWidth)
-	}
+	clipped := table.ClipRows(rows, m.tableXOffset, visibleWidth)
 	return lipgloss.JoinVertical(lipgloss.Left, clipped...)
-}
-
-func renderCaretRow(width int, style lipgloss.Style) string {
-	if width <= 0 {
-		width = 3
-	}
-	glyphs := make([]rune, width)
-	for i := range glyphs {
-		glyphs[i] = ' '
-	}
-	positions := []int{0, width / 2, max(0, width-1)}
-	for _, pos := range positions {
-		if pos >= 0 && pos < width {
-			glyphs[pos] = 'v'
-		}
-	}
-	return style.Render(string(glyphs))
 }
 
 func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
@@ -306,7 +291,7 @@ func (m *Model) renderTableHeader(layout tableLayout, gap string) string {
 	widths := []int{layout.cursor, layout.name, layout.action, layout.duration, layout.status, layout.precedence, layout.noLog, layout.operator}
 	cells := make([]string, len(labels))
 	for i := range labels {
-		cells[i] = padAndStyle(headerStyle, labels[i], widths[i], true)
+		cells[i] = table.PadAndStyle(headerStyle, labels[i], widths[i], true)
 	}
 	return strings.Join(cells, gap)
 }
@@ -335,14 +320,14 @@ func (m *Model) renderRuleRow(layout tableLayout, rule state.Rule, rowIdx int, s
 		statusStyle = statusEnabled
 	}
 	cells := []string{
-		padAndStyle(cursorStyle, cursor, layout.cursor, true),
-		padAndStyle(nameStyle, rule.Name, layout.name, true),
-		padAndStyle(actionStyle, rule.Action, layout.action, true),
-		padAndStyle(durationStyle, rule.Duration, layout.duration, true),
-		padAndStyle(statusStyle, statusLabel, layout.status, true),
-		padAndStyle(flagStyle, boolLabel(rule.Precedence), layout.precedence, true),
-		padAndStyle(flagStyle, boolLabel(rule.NoLog), layout.noLog, true),
-		padAndStyle(operatorStyle, describeOperator(rule.Operator), layout.operator, false),
+		table.PadAndStyle(cursorStyle, cursor, layout.cursor, true),
+		table.PadAndStyle(nameStyle, rule.Name, layout.name, true),
+		table.PadAndStyle(actionStyle, rule.Action, layout.action, true),
+		table.PadAndStyle(durationStyle, rule.Duration, layout.duration, true),
+		table.PadAndStyle(statusStyle, statusLabel, layout.status, true),
+		table.PadAndStyle(flagStyle, boolLabel(rule.Precedence), layout.precedence, true),
+		table.PadAndStyle(flagStyle, boolLabel(rule.NoLog), layout.noLog, true),
+		table.PadAndStyle(operatorStyle, describeOperator(rule.Operator), layout.operator, false),
 	}
 	gapStyle := lipgloss.NewStyle().Background(bg)
 	rowGap := gapStyle.Render(gap)
@@ -458,8 +443,8 @@ func (m *Model) startEdit(snapshot state.Snapshot) {
 	m.editInputs = inputs
 	m.editFocus = editFieldDescription
 	m.editRuleName = rule.Name
-	m.editActionIdx = indexOfValue(ruleActionOptions, strings.ToLower(rule.Action))
-	m.editDurIdx = indexOfValue(ruleDurationOptions, strings.ToLower(rule.Duration))
+	m.editActionIdx = indexOfOption(ruleActionOptions, strings.ToLower(rule.Action))
+	m.editDurIdx = indexOfOption(ruleDurationOptions, strings.ToLower(rule.Duration))
 	m.editNoLog = rule.NoLog
 	m.editPrecedence = rule.Precedence
 	m.editing = true
@@ -497,9 +482,9 @@ func (m *Model) adjustEditSelection(delta int) {
 	}
 	switch m.editFocus {
 	case editFieldAction:
-		m.editActionIdx = wrapIndex(m.editActionIdx+delta, len(ruleActionOptions))
+		m.editActionIdx = util.WrapIndex(m.editActionIdx, delta, len(ruleActionOptions))
 	case editFieldDuration:
-		m.editDurIdx = wrapIndex(m.editDurIdx+delta, len(ruleDurationOptions))
+		m.editDurIdx = util.WrapIndex(m.editDurIdx, delta, len(ruleDurationOptions))
 	case editFieldNoLog:
 		m.editNoLog = !m.editNoLog
 	case editFieldPrecedence:
@@ -532,8 +517,10 @@ func (m *Model) submitEdit(snapshot state.Snapshot) {
 		desc = strings.TrimSpace(m.editInputs[0].Value())
 	}
 	rule.Description = desc
-	rule.Action = ruleActionOptions[wrapIndex(m.editActionIdx, len(ruleActionOptions))].value
-	rule.Duration = ruleDurationOptions[wrapIndex(m.editDurIdx, len(ruleDurationOptions))].value
+	actIdx := util.WrapIndex(m.editActionIdx, 0, len(ruleActionOptions))
+	durIdx := util.WrapIndex(m.editDurIdx, 0, len(ruleDurationOptions))
+	rule.Action = ruleActionOptions[actIdx].value
+	rule.Duration = ruleDurationOptions[durIdx].value
 	rule.NoLog = m.editNoLog
 	rule.Precedence = m.editPrecedence
 	if rule.NodeID == "" {
@@ -671,28 +658,6 @@ func (m *Model) tableColumns() tableLayout {
 	return layout
 }
 
-// wrapIndex keeps i within [0,n).
-func wrapIndex(i, n int) int {
-	if n <= 0 {
-		return 0
-	}
-	i %= n
-	if i < 0 {
-		i += n
-	}
-	return i
-}
-
-func indexOfValue(opts []option, v string) int {
-	v = strings.ToLower(v)
-	for i, o := range opts {
-		if strings.ToLower(o.value) == v {
-			return i
-		}
-	}
-	return 0
-}
-
 func (m *Model) adjustTableX(delta int) {
 	if delta == 0 {
 		return
@@ -720,20 +685,6 @@ func (m *Model) contentWidth() int {
 		return m.width
 	}
 	return m.width - 4
-}
-
-func padAndStyle(style lipgloss.Style, text string, width int, truncate bool) string {
-	if width <= 0 {
-		return ""
-	}
-	content := text
-	if truncate {
-		content = util.TruncateString(text, width)
-	}
-	if util.RuneWidth(content) < width {
-		content = util.PadString(content, width)
-	}
-	return style.Render(content)
 }
 
 func (m *Model) clampSelection(snapshot state.Snapshot) {
