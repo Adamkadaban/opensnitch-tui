@@ -199,6 +199,31 @@ func (m *Model) appendInspectLines(lines ...string) {
 	m.updateInspectContent()
 }
 
+func (m *Model) insertInspectLinesBefore(pred func(string) bool, lines ...string) {
+	existing := m.inspectInfo.Lines
+	idx := len(existing)
+	for i, line := range existing {
+		if pred(line) {
+			idx = i
+			break
+		}
+	}
+	newLines := make([]string, 0, len(existing)+len(lines))
+	newLines = append(newLines, existing[:idx]...)
+	newLines = append(newLines, lines...)
+	newLines = append(newLines, existing[idx:]...)
+	m.inspectInfo.Lines = newLines
+	// recompute max width
+	maxW := 0
+	for _, line := range newLines {
+		if w := util.RuneWidth(line); w > maxW {
+			maxW = w
+		}
+	}
+	m.inspectInfo.MaxWidth = maxW
+	m.updateInspectContent()
+}
+
 func (m *Model) computeInspectDimensions() (cardWidth, innerWidth, innerHeight int) {
 	maxCardWidth := min(m.width-2, 96)
 	frameW, frameH := m.theme.Card.GetFrameSize()
@@ -405,6 +430,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			m.setYaraStatus("YARA: no matches", yaraStatusNoMatches)
 		} else {
 			m.setYaraStatus(fmt.Sprintf("YARA: matches (%d)", len(key.result.Matches)), yaraStatusMatches)
+			lines := []string{m.theme.Danger.Render("YARA matches:")}
+			for _, match := range key.result.Matches {
+				lines = append(lines, m.theme.Danger.Render(" - "+match.Rule))
+			}
+			m.insertInspectLinesBefore(func(line string) bool { return strings.HasPrefix(line, "Process Tree:") }, lines...)
 		}
 		return nil, true
 	}
