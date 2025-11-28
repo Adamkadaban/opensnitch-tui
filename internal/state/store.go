@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -181,6 +182,11 @@ func mergeEvents(old, incoming []Event, limit int) []Event {
 	for _, ev := range old {
 		appendUnique(ev)
 	}
+
+	// Sort by time, newest first
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].UnixNano > merged[j].UnixNano
+	})
 
 	if len(merged) > limit {
 		merged = merged[:limit]
