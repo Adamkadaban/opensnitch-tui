@@ -1,39 +1,29 @@
 # OpenSnitch TUI
 
-Terminal user interface for [OpenSnitch](https://github.com/evilsocket/opensnitch) built with Go and Bubble Tea. The goal is feature parity with the existing Python/Qt GUI: interactive prompts, rule management, node orchestration, firewall visibility, and telemetry dashboards.
+Bubble Tea–based terminal UI for [OpenSnitch](https://github.com/evilsocket/opensnitch). Target: **feature parity with the Python/Qt GUI**—interactive prompts, rule lifecycle, multi-node orchestration, firewall visibility, and telemetry dashboards.
 
-## Repository Layout
+---
 
-- `cmd/opensnitch-tui`: program entrypoint.
-- `internal/app`: runtime wiring (config, state, Bubble Tea program).
-- `internal/state`: central store shared across views.
-- `internal/ui`: Bubble Tea router and individual views.
-- `internal/config`: YAML config loader stored under `~/.config/opensnitch-tui/config.yaml`.
-- `references/`: upstream sources vendored locally (OpenSnitch proto/UI and Bubble Tea).
+## 🧰 Requirements
+- **Go** `1.24+`
+- **golangci-lint** `>= 1.56` (for `make lint`)
+- (Optional) **protoc** + `protoc-gen-go`/`protoc-gen-go-grpc` if regenerating stubs from `references/opensnitch/proto/ui.proto`
 
-## Quickstart
-
-1. Ensure Go 1.24+ is available. (If using a Go workspace, run `go work sync` as needed; otherwise modules work standalone.)
-2. Install `golangci-lint` (>= 1.56) for linting.
-3. Build, lint, and test frequently:
-
+## 🚀 Quickstart
 ```bash
-make build
-make lint
-make test
+make build   # compile
+make lint    # golangci-lint run
+make test    # go test ./...
+
+# Run the TUI (pass your flags via ARGS)
+make run ARGS="-config ~/.config/opensnitch-tui/config.yaml"
 ```
+Common flags:
+- `-config PATH` — YAML config (default `~/.config/opensnitch-tui/config.yaml`)
+- `-theme light|dark|auto` — session theme override
 
-4. Run the TUI once a config exists:
-
-```bash
-make run -- -config ~/.config/opensnitch-tui/config.yaml
-```
-
-Use `-theme light|dark|auto` to override the configured palette for a session.
-
-## Configuration
-
-Configuration lives at `~/.config/opensnitch-tui/config.yaml` by default. Example:
+## ⚙️ Configuration
+Default location: `~/.config/opensnitch-tui/config.yaml`
 
 ```yaml
 theme: auto
@@ -46,23 +36,46 @@ nodes:
 		skip_tls: false
 ```
 
-The bootstrapped UI renders configured nodes immediately; connection state will be filled in by the daemon client layer in subsequent milestones.
+## 🧭 Usage (key hints)
+- **Navigation:** arrow keys only (no vi keys)
+- **Rules view:** `e` enable · `d` disable · `x` delete · `m` modify
+- **Prompt dialog:** arrows to move focus/choices; `a` allow · `d` deny · `r` reject
+- **Tables:** arrows to move; PgUp/PgDn/Home/End for paging
 
-## Development Workflow
+## 🗂 Repository Layout
+- `cmd/opensnitch-tui/` — CLI entrypoint
+- `internal/app/` — wiring: config, state, Bubble Tea program
+- `internal/state/` — central store, reducers, selectors
+- `internal/ui/` — router and views (dashboard, events, alerts, rules, nodes, settings, prompt)
+- `internal/daemon/` — mock/server shim for tests; notification plumbing
+- `internal/controller/` — interfaces for rule/prompt/settings managers
+- `internal/pb/protocol/` — generated gRPC/proto stubs (from `references/opensnitch/proto/ui.proto`)
+- `internal/config/` — YAML config loader
+- `internal/theme/` — lipgloss styles
+- `internal/util/` — misc helpers (ANSI-safe slicing, padding, display names)
+- `references/` — vendored upstreams
+	- `references/opensnitch/` — upstream daemon/UI/proto (read-only; regenerate stubs when upstream changes)
+	- `references/bubbletea/` — Bubble Tea reference copy for hacking/patching
 
-- Follow `AGENTS.md` instructions: keep comments sparse, lint and test continuously, and verify the project builds after each change.
-- Use `make lint` before commits to catch formatting or vet issues.
-- Use `go test ./...` (or `make test`) to ensure state reducers, views, and future daemon interactions remain healthy.
-- When editing vendor references (proto or Bubble Tea), regenerate code via dedicated scripts before committing to avoid drift.
+## 🛠 Build & Dev Workflow
+- **Format & lint:** `gofmt -w` (IDE/Go tools) and `make lint`
+- **Tests:** `make test` (aliases `go test ./...`)
+- **Regenerating protos:** from repo root, run `make -C references/opensnitch/proto` (requires `protoc` + Go plugins)
+- **Regenerating bubbletea:** commit local patches under `references/bubbletea`; keep module pins in sync
 
-## Testing & Linting
+## 🔍 Testing Notes
+- Keep **unit tests** green (`go test ./...`)
+- Add table/render tests under `internal/ui/views/...` when altering layout/keys
+- Snapshot/VT tests can be introduced under `internal/ui/view/viewtest` (none shipped yet)
 
-- **Linting:** `make lint` (golangci-lint) enforces formatting, vet, and static checks. Install golangci-lint ≥ 1.56 and keep it on PATH.
-- **Unit tests:** `go test ./...` or `make test` exercises store reducers, view logic, and controller adapters. Run after every change.
-- **Snapshot / TUI regression tests:** use `make snapshots` (wraps `go test ./internal/ui/... -run Snapshot`) to refresh vt100 recordings whenever UI output intentionally changes. Commit updated artifacts under `testdata/` alongside code.
-- **Pre-push sanity:** `make verify` chains lint + tests so CI matches local runs.
-- **Golden files:** when tests under `internal/ui/view/viewtest` fail, inspect diffs via `git diff` before updating expected output with `UPDATE_SNAPSHOTS=1 go test ./path/to/package`.
+## 📦 Release/Dist (future)
+- Plan for `goreleaser` with Linux amd64/arm64 static builds
+- Package sample config, man page, shell completions
 
-## Status
+## 🧱 Project Status
+Active development. Implemented: router, dashboard/events/alerts/rules/nodes/settings views, rule editing, prompt UI scaffolding. Upcoming: live gRPC wiring, firewall view, full parity with Qt UI.
 
-The current milestone focuses on scaffolding: config loading, theming, Bubble Tea router, dashboard/nodes views, and build/test automation. Upcoming work will wire gRPC clients, live telemetry, modal prompts, firewall views, and full feature parity with the Qt UI.
+## 🤝 Contributing
+- Follow `AGENTS.md`
+- Keep comments minimal; prefer self-documenting code
+- Always run `make test` before sending changes
