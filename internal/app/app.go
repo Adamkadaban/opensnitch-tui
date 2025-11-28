@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -98,6 +99,7 @@ func Run(ctx context.Context, opts Options) error {
 	})
 
 	if err := group.Wait(); err != nil && !errors.Is(err, tea.ErrProgramKilled) && !errors.Is(err, context.Canceled) {
+		log.Printf("server error: %v", err)
 		return err
 	}
 

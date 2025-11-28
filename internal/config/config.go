@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -47,6 +49,53 @@ type Node struct {
 	Authority string `yaml:"authority"`
 }
 
+// Validate checks the configuration for common errors.
+func Validate(cfg Config) error {
+	var errs []string
+
+	for i, n := range cfg.Nodes {
+		if err := validateNode(n); err != nil {
+			errs = append(errs, fmt.Sprintf("nodes[%d]: %v", i, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func validateNode(n Node) error {
+	if strings.TrimSpace(n.Address) == "" {
+		return errors.New("address is required")
+	}
+
+	// If scheme present, accept as-is; otherwise require host:port with numeric port.
+	if !strings.Contains(n.Address, "://") {
+		host, port, err := net.SplitHostPort(n.Address)
+		if err != nil || host == "" || port == "" {
+			return fmt.Errorf("address must be host:port or scheme://... (got %q)", n.Address)
+		}
+		if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+			return fmt.Errorf("port must be numeric 1-65535 (got %q)", port)
+		}
+	}
+
+	// If TLS is provided, verify files exist.
+	if n.CertPath != "" {
+		if _, err := os.Stat(n.CertPath); err != nil {
+			return fmt.Errorf("cert_path: %v", err)
+		}
+	}
+	if n.KeyPath != "" {
+		if _, err := os.Stat(n.KeyPath); err != nil {
+			return fmt.Errorf("key_path: %v", err)
+		}
+	}
+
+	return nil
+}
+
 // Load reads configuration data from the provided path. If the file does not exist,
 // a default configuration is returned without an error.
 func Load(path string) (Config, error) {
@@ -67,6 +116,10 @@ func Load(path string) (Config, error) {
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+
+	if err := Validate(cfg); err != nil {
+		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
 
 	return cfg, nil
@@ -180,6 +233,9 @@ func Save(path string, cfg Config) error {
 	resolved, err := resolvePath(path)
 	if err != nil {
 		return err
+	}
+	if err := Validate(cfg); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
 		return fmt.Errorf("ensure config dir: %w", err)

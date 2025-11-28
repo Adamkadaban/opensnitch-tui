@@ -1,0 +1,20 @@
+                                                                                                    
+    alpha (2)                                                                                       
+     NAME                   ACTION DURATION STATUS   PRECEDENCE NOLOG  OPERATOR                     
+  >  allow-curl             allow  once     enabled  no         no     process.path startswith /us  
+     deny-dns               deny   always   disabled no         yes    dest.host equals example.or  
+                                                                                                    
+    Name: allow-curl                                                                                
+    Node: -                                                                                         
+    Description: NONE                                                                               
+    Action: allow                                                                                   
+    Duration: once                                                                                  
+    Enabled: true                                                                                   
+    Precedence: false                                                                               
+    NoLog: false                                                                                    
+    Created: unknown                                                                                
+    Operator: process.path startswith /usr/bin/curl                                                 
+                                                                                                    
+  ←/→ scroll · [/] nodes · ↑/↓ rules · e enable · d disable · x delete · m modify                   
+                                                                                                    
+                                                                                                    

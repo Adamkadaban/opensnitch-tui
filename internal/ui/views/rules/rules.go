@@ -500,6 +500,14 @@ func (m *Model) submitEdit(snapshot state.Snapshot) {
 		m.statusLine = m.theme.Danger.Render("Rules controller unavailable")
 		return
 	}
+	if len(ruleActionOptions) == 0 {
+		m.statusLine = m.theme.Danger.Render("No action options configured")
+		return
+	}
+	if len(ruleDurationOptions) == 0 {
+		m.statusLine = m.theme.Danger.Render("No duration options configured")
+		return
+	}
 	var rule state.Rule
 	for _, r := range rules {
 		if r.Name == m.editRuleName {
