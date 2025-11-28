@@ -14,6 +14,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/components/table"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/widget"
 	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
@@ -68,33 +69,18 @@ const (
 	editFieldCount
 )
 
-type option struct {
-	label string
-	value string
-}
-
 var editPlaceholders = []string{"", "allow|deny|ask", "always|once|until restart", "yes/no", "yes/no"}
 
-var ruleActionOptions = []option{
-	{label: "Allow", value: "allow"},
-	{label: "Deny", value: "deny"},
-	{label: "Ask", value: "ask"},
+var ruleActionOptions = []widget.Option{
+	{Label: "Allow", Value: "allow"},
+	{Label: "Deny", Value: "deny"},
+	{Label: "Ask", Value: "ask"},
 }
 
-var ruleDurationOptions = []option{
-	{label: "Once", value: "once"},
-	{label: "Until restart", value: "until restart"},
-	{label: "Always", value: "always"},
-}
-
-func indexOfOption(opts []option, v string) int {
-	v = strings.ToLower(v)
-	for i, o := range opts {
-		if strings.ToLower(o.value) == v {
-			return i
-		}
-	}
-	return 0
+var ruleDurationOptions = []widget.Option{
+	{Label: "Once", Value: "once"},
+	{Label: "Until restart", Value: "until restart"},
+	{Label: "Always", Value: "always"},
 }
 
 type tableLayout struct {
@@ -394,31 +380,11 @@ func (m *Model) renderEditInput(label string, inputs []textinput.Model, focused 
 }
 
 func (m *Model) renderEditToggle(label string, enabled bool, focused bool) string {
-	options := []option{{label: "Off", value: "off"}, {label: "On", value: "on"}}
-	idx := 0
-	if enabled {
-		idx = 1
-	}
-	return m.renderEditRow(label, options, idx, focused)
+	return widget.RenderToggle(m.theme, label, enabled, focused)
 }
 
-func (m *Model) renderEditRow(label string, opts []option, selected int, focused bool) string {
-	cells := make([]string, len(opts))
-	for idx, opt := range opts {
-		style := m.theme.TabInactive
-		marker := " "
-		if idx == selected {
-			style = m.theme.TabActive
-			if focused {
-				style = style.Underline(true).Bold(true)
-				marker = m.theme.Warning.Render(">")
-			}
-		} else if focused {
-			style = style.Faint(true)
-		}
-		cells[idx] = fmt.Sprintf("%s%s", marker, style.Render(opt.label))
-	}
-	return fmt.Sprintf("%s %s", m.theme.Header.Render(label+":"), strings.Join(cells, " "))
+func (m *Model) renderEditRow(label string, opts []widget.Option, selected int, focused bool) string {
+	return widget.RenderOptionRow(m.theme, label, opts, selected, focused)
 }
 
 func (m *Model) startEdit(snapshot state.Snapshot) {
@@ -442,8 +408,8 @@ func (m *Model) startEdit(snapshot state.Snapshot) {
 	m.editInputs = inputs
 	m.editFocus = editFieldDescription
 	m.editRuleName = rule.Name
-	m.editActionIdx = indexOfOption(ruleActionOptions, strings.ToLower(rule.Action))
-	m.editDurIdx = indexOfOption(ruleDurationOptions, strings.ToLower(rule.Duration))
+	m.editActionIdx = widget.IndexOf(ruleActionOptions, strings.ToLower(rule.Action))
+	m.editDurIdx = widget.IndexOf(ruleDurationOptions, strings.ToLower(rule.Duration))
 	m.editNoLog = rule.NoLog
 	m.editPrecedence = rule.Precedence
 	m.editing = true
@@ -526,8 +492,8 @@ func (m *Model) submitEdit(snapshot state.Snapshot) {
 	rule.Description = desc
 	actIdx := util.WrapIndex(m.editActionIdx, 0, len(ruleActionOptions))
 	durIdx := util.WrapIndex(m.editDurIdx, 0, len(ruleDurationOptions))
-	rule.Action = ruleActionOptions[actIdx].value
-	rule.Duration = ruleDurationOptions[durIdx].value
+	rule.Action = ruleActionOptions[actIdx].Value
+	rule.Duration = ruleDurationOptions[durIdx].Value
 	rule.NoLog = m.editNoLog
 	rule.Precedence = m.editPrecedence
 	if rule.NodeID == "" {

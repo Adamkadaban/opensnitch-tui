@@ -16,6 +16,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/widget"
 	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
@@ -57,39 +58,34 @@ const (
 
 const settingsFieldCount = 9
 
-type option struct {
-	label string
-	value string
+var promptActions = []widget.Option{
+	{Label: "Allow", Value: "allow"},
+	{Label: "Deny", Value: "deny"},
+	{Label: "Reject", Value: "reject"},
 }
 
-var promptActions = []option{
-	{label: "Allow", value: "allow"},
-	{label: "Deny", value: "deny"},
-	{label: "Reject", value: "reject"},
+var promptDurations = []widget.Option{
+	{Label: "Once", Value: "once"},
+	{Label: "Until restart", Value: "until restart"},
+	{Label: "Always", Value: "always"},
 }
 
-var promptDurations = []option{
-	{label: "Once", value: "once"},
-	{label: "Until restart", value: "until restart"},
-	{label: "Always", value: "always"},
+var promptTargets = []widget.Option{
+	{Label: "Executable", Value: "process.path"},
+	{Label: "Command", Value: "process.command"},
+	{Label: "Process ID", Value: "process.id"},
+	{Label: "User ID", Value: "user.id"},
+	{Label: "Destination host", Value: "dest.host"},
+	{Label: "Destination IP", Value: "dest.ip"},
+	{Label: "Destination port", Value: "dest.port"},
 }
 
-var promptTargets = []option{
-	{label: "Executable", value: "process.path"},
-	{label: "Command", value: "process.command"},
-	{label: "Process ID", value: "process.id"},
-	{label: "User ID", value: "user.id"},
-	{label: "Destination host", value: "dest.host"},
-	{label: "Destination IP", value: "dest.ip"},
-	{label: "Destination port", value: "dest.port"},
-}
-
-var promptTimeouts = []option{
-	{label: "15s", value: "15"},
-	{label: "30s", value: "30"},
-	{label: "60s", value: "60"},
-	{label: "120s", value: "120"},
-	{label: "300s", value: "300"},
+var promptTimeouts = []widget.Option{
+	{Label: "15s", Value: "15"},
+	{Label: "30s", Value: "30"},
+	{Label: "60s", Value: "60"},
+	{Label: "120s", Value: "120"},
+	{Label: "300s", Value: "300"},
 }
 
 var themeOptions = buildThemeOptions()
@@ -225,15 +221,15 @@ func (m *Model) View() string {
 
 func (m *Model) syncSelection() {
 	snapshot := m.store.Snapshot()
-	m.themeIdx = optionIndex(themeOptions, snapshot.Settings.ThemeName)
-	m.actionIdx = optionIndex(promptActions, snapshot.Settings.DefaultPromptAction)
-	m.durationIdx = optionIndex(promptDurations, snapshot.Settings.DefaultPromptDuration)
-	m.targetIdx = optionIndex(promptTargets, snapshot.Settings.DefaultPromptTarget)
+	m.themeIdx = widget.IndexOf(themeOptions, snapshot.Settings.ThemeName)
+	m.actionIdx = widget.IndexOf(promptActions, snapshot.Settings.DefaultPromptAction)
+	m.durationIdx = widget.IndexOf(promptDurations, snapshot.Settings.DefaultPromptDuration)
+	m.targetIdx = widget.IndexOf(promptTargets, snapshot.Settings.DefaultPromptTarget)
 	timeoutSeconds := int(snapshot.Settings.PromptTimeout / time.Second)
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 30
 	}
-	m.timeoutIdx = optionIndex(promptTimeouts, fmt.Sprintf("%d", timeoutSeconds))
+	m.timeoutIdx = widget.IndexOf(promptTimeouts, fmt.Sprintf("%d", timeoutSeconds))
 	m.alertsInterrupt = snapshot.Settings.AlertsInterrupt
 	m.pauseOnInspect = snapshot.Settings.PausePromptOnInspect
 	m.yaraEnabled = snapshot.Settings.YaraEnabled
@@ -338,12 +334,12 @@ func (m *Model) persistYaraRuleDir() {
 }
 
 func (m *Model) saveAction() (string, error) {
-	choice := promptActions[m.actionIdx].value
+	choice := promptActions[m.actionIdx].Value
 	value, err := m.controller.SetDefaultPromptAction(choice)
 	if err != nil {
 		return "", err
 	}
-	m.actionIdx = optionIndex(promptActions, value)
+	m.actionIdx = widget.IndexOf(promptActions, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.DefaultPromptAction = value
 	})
@@ -351,12 +347,12 @@ func (m *Model) saveAction() (string, error) {
 }
 
 func (m *Model) saveDuration() (string, error) {
-	choice := promptDurations[m.durationIdx].value
+	choice := promptDurations[m.durationIdx].Value
 	value, err := m.controller.SetDefaultPromptDuration(choice)
 	if err != nil {
 		return "", err
 	}
-	m.durationIdx = optionIndex(promptDurations, value)
+	m.durationIdx = widget.IndexOf(promptDurations, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.DefaultPromptDuration = value
 	})
@@ -364,12 +360,12 @@ func (m *Model) saveDuration() (string, error) {
 }
 
 func (m *Model) saveTarget() (string, error) {
-	choice := promptTargets[m.targetIdx].value
+	choice := promptTargets[m.targetIdx].Value
 	value, err := m.controller.SetDefaultPromptTarget(choice)
 	if err != nil {
 		return "", err
 	}
-	m.targetIdx = optionIndex(promptTargets, value)
+	m.targetIdx = widget.IndexOf(promptTargets, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.DefaultPromptTarget = value
 	})
@@ -377,12 +373,12 @@ func (m *Model) saveTarget() (string, error) {
 }
 
 func (m *Model) saveTheme() (string, error) {
-	choice := themeOptions[m.themeIdx].value
+	choice := themeOptions[m.themeIdx].Value
 	value, err := m.controller.SetTheme(choice)
 	if err != nil {
 		return "", err
 	}
-	m.themeIdx = optionIndex(themeOptions, value)
+	m.themeIdx = widget.IndexOf(themeOptions, value)
 	m.updateSettings(func(settings *state.Settings) {
 		settings.ThemeName = value
 	})
@@ -395,7 +391,7 @@ func (m *Model) savePromptTimeout() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	m.timeoutIdx = optionIndex(promptTimeouts, fmt.Sprintf("%d", value))
+	m.timeoutIdx = widget.IndexOf(promptTimeouts, fmt.Sprintf("%d", value))
 	m.updateSettings(func(settings *state.Settings) {
 		settings.PromptTimeout = time.Duration(value) * time.Second
 	})
@@ -479,15 +475,7 @@ func (m *Model) renderSection(title string, rows []string) string {
 }
 
 func (m *Model) renderToggle(label string, enabled bool, focused bool) string {
-	options := []option{
-		{label: "Off", value: "off"},
-		{label: "On", value: "on"},
-	}
-	idx := 0
-	if enabled {
-		idx = 1
-	}
-	return m.renderRow(label, options, idx, focused)
+	return widget.RenderToggle(m.theme, label, enabled, focused)
 }
 
 func (m *Model) renderInput(label string, input textinput.Model, focused bool) string {
@@ -500,47 +488,23 @@ func (m *Model) renderInput(label string, input textinput.Model, focused bool) s
 	return fmt.Sprintf("%s: %s", label, ti.View())
 }
 
-func (m *Model) renderRow(label string, opts []option, selected int, focused bool) string {
-	cells := make([]string, len(opts))
-	for idx, opt := range opts {
-		style := m.theme.TabInactive
-		marker := " "
-		if idx == selected {
-			style = m.theme.TabActive
-			if focused {
-				style = style.Underline(true).Bold(true)
-				marker = m.theme.Warning.Render(">")
-			}
-		} else if focused {
-			style = style.Faint(true)
-		}
-		cells[idx] = fmt.Sprintf("%s%s", marker, style.Render(opt.label))
-	}
-	return fmt.Sprintf("%s %s", m.theme.Header.Render(label+":"), strings.Join(cells, " "))
+func (m *Model) renderRow(label string, opts []widget.Option, selected int, focused bool) string {
+	return widget.RenderOptionRow(m.theme, label, opts, selected, focused)
 }
 
-func optionIndex(options []option, value string) int {
-	for idx, opt := range options {
-		if opt.value == value {
-			return idx
-		}
-	}
-	return 0
-}
-
-func optionSeconds(opt option) int {
-	seconds, err := strconv.Atoi(opt.value)
+func optionSeconds(opt widget.Option) int {
+	seconds, err := strconv.Atoi(opt.Value)
 	if err != nil {
 		return 30
 	}
 	return seconds
 }
 
-func buildThemeOptions() []option {
+func buildThemeOptions() []widget.Option {
 	presets := theme.Presets()
-	opts := make([]option, 0, len(presets))
+	opts := make([]widget.Option, 0, len(presets))
 	for _, preset := range presets {
-		opts = append(opts, option{label: preset.Label, value: preset.Name})
+		opts = append(opts, widget.Option{Label: preset.Label, Value: preset.Name})
 	}
 	return opts
 }
