@@ -8,6 +8,7 @@ type ViewKind string
 const (
 	ViewDashboard ViewKind = "dashboard"
 	ViewAlerts    ViewKind = "alerts"
+	ViewEvents    ViewKind = "events"
 	ViewRules     ViewKind = "rules"
 	ViewNodes     ViewKind = "nodes"
 	ViewSettings  ViewKind = "settings"
@@ -16,6 +17,7 @@ const (
 // DefaultViewOrder drives the tab navigation order across the application.
 var DefaultViewOrder = []ViewKind{
 	ViewDashboard,
+	ViewEvents,
 	ViewAlerts,
 	ViewRules,
 	ViewNodes,
@@ -61,7 +63,17 @@ type Stats struct {
 	TopDestPorts   []StatBucket
 	TopExecutables []StatBucket
 	TopUsers       []StatBucket
+	Events         []Event
 	UpdatedAt      time.Time
+}
+
+// Event represents a daemon event entry.
+type Event struct {
+	NodeID     string
+	Time       string
+	UnixNano   int64
+	Connection Connection
+	Rule       Rule
 }
 
 // StatBucket captures a label/value pair for breakdown charts.

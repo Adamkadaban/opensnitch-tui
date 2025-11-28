@@ -16,6 +16,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/alerts"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/dashboard"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/events"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/nodes"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/rules"
 	settingsview "github.com/adamkadaban/opensnitch-tui/internal/ui/views/settings"
@@ -57,6 +58,7 @@ func New(store *state.Store, opts Options) *Model {
 	views := map[state.ViewKind]view.Model{
 		state.ViewDashboard: dashboard.New(store, opts.Theme),
 		state.ViewAlerts:    alerts.New(store, opts.Theme),
+		state.ViewEvents:    events.New(store, opts.Theme),
 		state.ViewRules:     rules.New(store, opts.Theme, opts.Rules),
 		state.ViewNodes:     nodes.New(store, opts.Theme),
 		state.ViewSettings:  settingsview.New(store, opts.Theme, opts.Settings),

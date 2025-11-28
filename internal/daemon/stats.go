@@ -34,6 +34,7 @@ func convertStats(stats *pb.Statistics, nodeID, nodeName string) state.Stats {
 		TopDestPorts:   topBuckets(stats.GetByPort(), 5),
 		TopExecutables: topBuckets(stats.GetByExecutable(), 5),
 		TopUsers:       topUserBuckets(stats.GetByUid(), 5),
+		Events:         convertEvents(stats.GetEvents(), nodeID, 0),
 		UpdatedAt:      time.Now(),
 	}
 }
@@ -77,4 +78,34 @@ func topUserBuckets(values map[string]uint64, size int) []state.StatBucket {
 		remapped[label] = val
 	}
 	return topBuckets(remapped, size)
+}
+
+func convertEvents(events []*pb.Event, nodeID string, limit int) []state.Event {
+	if len(events) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = len(events)
+	}
+	if len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+	converted := make([]state.Event, len(events))
+	for i, ev := range events {
+		converted[i] = convertEvent(ev, nodeID)
+	}
+	return converted
+}
+
+func convertEvent(ev *pb.Event, nodeID string) state.Event {
+	if ev == nil {
+		return state.Event{}
+	}
+	return state.Event{
+		NodeID:     nodeID,
+		Time:       ev.GetTime(),
+		UnixNano:   ev.GetUnixnano(),
+		Connection: convertConnection(ev.GetConnection()),
+		Rule:       convertRule(ev.GetRule(), nodeID),
+	}
 }

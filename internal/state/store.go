@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -149,8 +150,46 @@ func (s *Store) SetStats(stats Stats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Merge events so they don't disappear when stats updates lack events.
+	stats.Events = mergeEvents(s.snapshot.Stats.Events, stats.Events, maxEvents)
+
 	s.snapshot.Stats = cloneStats(stats)
 	s.notifyLocked()
+}
+
+const maxEvents = 200
+
+func mergeEvents(old, new []Event, limit int) []Event {
+	if limit <= 0 {
+		limit = maxEvents
+	}
+	merged := make([]Event, 0, len(old)+len(new))
+	seen := make(map[string]struct{}, len(old)+len(new))
+
+	appendUnique := func(ev Event) {
+		key := eventKey(ev)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, ev)
+	}
+
+	for _, ev := range new {
+		appendUnique(ev)
+	}
+	for _, ev := range old {
+		appendUnique(ev)
+	}
+
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged
+}
+
+func eventKey(ev Event) string {
+	return fmt.Sprintf("%s|%d|%s|%s|%s|%s|%d", ev.NodeID, ev.UnixNano, ev.Time, ev.Rule.Name, ev.Connection.DstHost, ev.Connection.DstIP, ev.Connection.DstPort)
 }
 
 // SetError records a user-visible error message.
@@ -428,7 +467,17 @@ func cloneStats(stats Stats) Stats {
 	stats.TopDestPorts = cloneBuckets(stats.TopDestPorts)
 	stats.TopExecutables = cloneBuckets(stats.TopExecutables)
 	stats.TopUsers = cloneBuckets(stats.TopUsers)
+	stats.Events = cloneEvents(stats.Events)
 	return stats
+}
+
+func cloneEvents(events []Event) []Event {
+	if len(events) == 0 {
+		return nil
+	}
+	copyEvents := make([]Event, len(events))
+	copy(copyEvents, events)
+	return copyEvents
 }
 
 func cloneBuckets(buckets []StatBucket) []StatBucket {
