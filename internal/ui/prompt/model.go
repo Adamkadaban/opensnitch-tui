@@ -189,16 +189,6 @@ func (m *Model) setYaraStatus(status string, kind yaraStatusKind) {
 	m.yaraKind = kind
 }
 
-func (m *Model) appendInspectLines(lines ...string) {
-	for _, line := range lines {
-		m.inspectInfo.Lines = append(m.inspectInfo.Lines, line)
-		if w := util.RuneWidth(line); w > m.inspectInfo.MaxWidth {
-			m.inspectInfo.MaxWidth = w
-		}
-	}
-	m.updateInspectContent()
-}
-
 func (m *Model) insertInspectLinesBefore(pred func(string) bool, lines ...string) {
 	existing := m.inspectInfo.Lines
 	idx := len(existing)

@@ -169,17 +169,7 @@ func filledWidth(value, total uint64, width int) int {
 }
 
 func trimToWidth(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:width-1]) + "…"
+	return util.TruncateString(value, width)
 }
 
 func (m *Model) metaLine(stats state.Stats) string {

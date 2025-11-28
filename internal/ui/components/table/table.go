@@ -38,7 +38,7 @@ func RenderCaretRow(width int, style lipgloss.Style) string {
 	for i := range glyphs {
 		glyphs[i] = ' '
 	}
-	positions := []int{0, width / 2, max(0, width-1)}
+	positions := []int{0, width / 2, intMax(0, width-1)}
 	for _, pos := range positions {
 		if pos >= 0 && pos < width {
 			glyphs[pos] = 'v'
@@ -62,7 +62,7 @@ func PadAndStyle(style lipgloss.Style, text string, width int, truncate bool) st
 	return style.Render(content)
 }
 
-func max(a, b int) int {
+func intMax(a, b int) int {
 	if a > b {
 		return a
 	}

@@ -73,7 +73,6 @@ type option struct {
 	value string
 }
 
-var editLabels = []string{"Description", "Action", "Duration", "NoLog", "Precedence"}
 var editPlaceholders = []string{"", "allow|deny|ask", "always|once|until restart", "yes/no", "yes/no"}
 
 var ruleActionOptions = []option{
@@ -800,33 +799,15 @@ func describeOperator(op state.RuleOperator) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
+func stripBackground(style lipgloss.Style) lipgloss.Style {
+	return style.UnsetBackground()
+}
+
 func boolLabel(v bool) string {
 	if v {
 		return "yes"
 	}
 	return "no"
-}
-
-func boolToYesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
-}
-
-func parseBoolInput(s string) (bool, bool) {
-	s = strings.ToLower(strings.TrimSpace(s))
-	switch s {
-	case "y", "yes", "true", "1":
-		return true, true
-	case "n", "no", "false", "0":
-		return false, true
-	}
-	return false, false
-}
-
-func stripBackground(style lipgloss.Style) lipgloss.Style {
-	return style.UnsetBackground()
 }
 
 func (m *Model) rowStripeColor(rowIdx int) lipgloss.Color {

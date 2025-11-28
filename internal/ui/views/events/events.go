@@ -142,10 +142,10 @@ func (m *Model) SetTheme(th theme.Theme) {
 
 func (m *Model) renderEventsTable(events []state.Event) string {
 	layout := m.tableColumns()
-	start := min(m.tableOffset, max(0, len(events)-1))
+	start := intMin(m.tableOffset, intMax(0, len(events)-1))
 	capacity := m.tableCapacity()
 	if start > len(events)-capacity {
-		start = max(0, len(events)-capacity)
+		start = intMax(0, len(events)-capacity)
 	}
 	end := min(len(events), start+capacity)
 	moreBelow := end < len(events)
@@ -164,7 +164,7 @@ func (m *Model) renderEventsTable(events []state.Event) string {
 
 	m.tableMaxWidth = table.ComputeMaxWidth(rows)
 
-	visibleWidth := max(1, m.contentWidth())
+	visibleWidth := intMax(1, m.contentWidth())
 	clipped := table.ClipRows(rows, m.tableXOffset, visibleWidth)
 	return lipgloss.JoinVertical(lipgloss.Left, clipped...)
 }
@@ -175,7 +175,7 @@ func (m *Model) renderEventDetail(snapshot state.Snapshot) string {
 		return ""
 	}
 	ev := eventAt(events, m.rowIdx)
-	inner := max(20, m.contentWidth())
+	inner := intMax(20, m.contentWidth())
 	fmtLine := func(label, value string) string {
 		line := fmt.Sprintf("%s: %s", label, value)
 		return util.TruncateString(line, inner)
@@ -348,7 +348,7 @@ func (m *Model) renderStatus() string {
 }
 
 func (m *Model) wrap(body string) string {
-	return m.theme.Body.Width(max(1, m.width)).Height(max(5, m.height)).Render(body)
+	return m.theme.Body.Width(intMax(1, m.width)).Height(intMax(5, m.height)).Render(body)
 }
 
 func (m *Model) tableCapacity() int {
@@ -377,7 +377,7 @@ func (m *Model) tableColumns() tableLayout {
 		cmdline: minCmdlineWidth,
 		rule:    minRuleWidth,
 	}
-	inner := max(40, m.contentWidth())
+	inner := intMax(40, m.contentWidth())
 	gapWidth := columnGap * (layout.count() - 1)
 	usable := inner - gapWidth
 	if usable <= 0 {
@@ -430,15 +430,15 @@ func (m *Model) tableColumns() tableLayout {
 			}
 		}
 	}
-	layout.cursor = max(1, layout.cursor)
-	layout.time = max(10, layout.time)
-	layout.action = max(4, layout.action)
-	layout.dstIP = max(6, layout.dstIP)
-	layout.dstHost = max(6, layout.dstHost)
-	layout.proto = max(3, layout.proto)
-	layout.process = max(6, layout.process)
-	layout.cmdline = max(6, layout.cmdline)
-	layout.rule = max(4, layout.rule)
+	layout.cursor = intMax(1, layout.cursor)
+	layout.time = intMax(10, layout.time)
+	layout.action = intMax(4, layout.action)
+	layout.dstIP = intMax(6, layout.dstIP)
+	layout.dstHost = intMax(6, layout.dstHost)
+	layout.proto = intMax(3, layout.proto)
+	layout.process = intMax(6, layout.process)
+	layout.cmdline = intMax(6, layout.cmdline)
+	layout.rule = intMax(4, layout.rule)
 	return layout
 }
 
@@ -509,14 +509,14 @@ func (m *Model) selectedRowColor() lipgloss.Color {
 	return m.theme.TableRowSelect
 }
 
-func min(a, b int) int {
+func intMin(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
 }
 
-func max(a, b int) int {
+func intMax(a, b int) int {
 	if a > b {
 		return a
 	}

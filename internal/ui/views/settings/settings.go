@@ -284,14 +284,6 @@ func (m *Model) persistAll() {
 	m.status = m.theme.Success.Render("Settings saved")
 }
 
-func (m *Model) persistTheme() {
-	if value, err := m.saveTheme(); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save theme: %v", err))
-	} else {
-		m.status = m.theme.Success.Render(fmt.Sprintf("Theme switched to %s", theme.Label(value)))
-	}
-}
-
 func (m *Model) contentWidth() int {
 	if m.width <= 0 {
 		return 80
@@ -334,68 +326,6 @@ func (m *Model) shiftSelection(delta int) {
 		}
 		current = util.WrapIndex(current, delta, 2)
 		m.yaraEnabled = current == 1
-	}
-}
-
-func (m *Model) persistAction() {
-	if value, err := m.saveAction(); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save action: %v", err))
-	} else {
-		m.status = m.theme.Success.Render(fmt.Sprintf("Default action set to %s", value))
-	}
-}
-
-func (m *Model) persistDuration() {
-	if value, err := m.saveDuration(); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save duration: %v", err))
-	} else {
-		m.status = m.theme.Success.Render(fmt.Sprintf("Default duration set to %s", value))
-	}
-}
-
-func (m *Model) persistTarget() {
-	if value, err := m.saveTarget(); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save target: %v", err))
-	} else {
-		m.status = m.theme.Success.Render(fmt.Sprintf("Default target set to %s", value))
-	}
-}
-
-func (m *Model) persistPromptTimeout() {
-	if seconds, err := m.savePromptTimeout(); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save timeout: %v", err))
-	} else {
-		m.status = m.theme.Success.Render(fmt.Sprintf("Prompt timeout set to %ds", seconds))
-	}
-}
-
-func (m *Model) persistAlertsInterrupt() {
-	if enabled, err := m.saveAlertsInterrupt(m.alertsInterrupt); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save alerts setting: %v", err))
-	} else if enabled {
-		m.status = m.theme.Success.Render("Alerts will interrupt")
-	} else {
-		m.status = m.theme.Success.Render("Alerts stay in alerts tab")
-	}
-}
-
-func (m *Model) persistPauseOnInspect() {
-	if enabled, err := m.savePauseOnInspect(m.pauseOnInspect); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save pause-on-inspect: %v", err))
-	} else if enabled {
-		m.status = m.theme.Success.Render("Inspect will pause timeouts")
-	} else {
-		m.status = m.theme.Success.Render("Inspect won’t pause timeouts")
-	}
-}
-
-func (m *Model) persistYaraEnabled() {
-	if enabled, err := m.saveYaraEnabled(m.yaraEnabled); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to save YARA enabled: %v", err))
-	} else if enabled {
-		m.status = m.theme.Success.Render("YARA scanning enabled")
-	} else {
-		m.status = m.theme.Success.Render("YARA scanning disabled")
 	}
 }
 

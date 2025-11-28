@@ -159,12 +159,12 @@ func (s *Store) SetStats(stats Stats) {
 
 const maxEvents = 200
 
-func mergeEvents(old, new []Event, limit int) []Event {
+func mergeEvents(old, incoming []Event, limit int) []Event {
 	if limit <= 0 {
 		limit = maxEvents
 	}
-	merged := make([]Event, 0, len(old)+len(new))
-	seen := make(map[string]struct{}, len(old)+len(new))
+	merged := make([]Event, 0, len(old)+len(incoming))
+	seen := make(map[string]struct{}, len(old)+len(incoming))
 
 	appendUnique := func(ev Event) {
 		key := eventKey(ev)
@@ -175,7 +175,7 @@ func mergeEvents(old, new []Event, limit int) []Event {
 		merged = append(merged, ev)
 	}
 
-	for _, ev := range new {
+	for _, ev := range incoming {
 		appendUnique(ev)
 	}
 	for _, ev := range old {

@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/view"
+	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
 // Model renders configured daemon nodes and their connection status.
@@ -38,8 +40,23 @@ func (m *Model) View() string {
 		return m.theme.Body.Width(max(1, m.width)).Height(max(3, m.height)).Render(msg)
 	}
 
-	rows := make([]string, 0, len(snapshot.Nodes))
-	for idx, node := range snapshot.Nodes {
+	nodes := append([]state.Node(nil), snapshot.Nodes...)
+	sort.SliceStable(nodes, func(i, j int) bool {
+		ni, nj := nodes[i], nodes[j]
+		nameI, nameJ := ni.Name != "", nj.Name != ""
+		if nameI != nameJ {
+			return nameI // names before unnamed
+		}
+		di := strings.ToLower(util.DisplayName(ni))
+		dj := strings.ToLower(util.DisplayName(nj))
+		if di == dj {
+			return ni.ID < nj.ID
+		}
+		return di < dj
+	})
+
+	rows := make([]string, 0, len(nodes))
+	for idx, node := range nodes {
 		label := fmt.Sprintf("%02d · %s", idx+1, labelForNode(node))
 		status := m.statusStyle(node.Status).Render(strings.ToUpper(string(node.Status)))
 		meta := nodeDetails(node)
