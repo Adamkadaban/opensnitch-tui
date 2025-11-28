@@ -354,17 +354,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			case "tab", "shift+tab":
 				// let global tab navigation (view switching) work while inspecting
 				return nil, false
-			case "up", "ctrl+b", "pgup":
+			case "up", "pgup":
 				m.inspectVP.LineUp(1)
 				return nil, true
-			case "down", "ctrl+f", "pgdown":
+			case "down", "pgdown":
 				m.inspectVP.LineDown(1)
-				return nil, true
-			case "g":
-				m.inspectVP.GotoTop()
-				return nil, true
-			case "G":
-				m.inspectVP.GotoBottom()
 				return nil, true
 			case "left":
 				m.adjustInspectX(-4)
