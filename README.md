@@ -1,6 +1,15 @@
+> [!WARNING]
+> This project is entirely vibecoded. Use at your own risk
+
 # OpenSnitch TUI
 
-Bubble Tea–based terminal UI for [OpenSnitch](https://github.com/evilsocket/opensnitch). Target: **feature parity with the Python/Qt GUI**—interactive prompts, rule lifecycle, multi-node orchestration, firewall visibility, and telemetry dashboards.
+TUI for [OpenSnitch](https://github.com/evilsocket/opensnitch) that includes a yara scanner.
+
+
+## 📽 Demo
+[![asciicast](https://asciinema.org/a/HqPc46dL8TbHQG7YgiR7g02ia.svg)](https://asciinema.org/a/HqPc46dL8TbHQG7YgiR7g02ia)
+
+
 
 ---
 
@@ -8,6 +17,7 @@ Bubble Tea–based terminal UI for [OpenSnitch](https://github.com/evilsocket/op
 - **Go** `1.24+`
 - **golangci-lint** `>= 1.56` (for `make lint`)
 - (Optional) **protoc** + `protoc-gen-go`/`protoc-gen-go-grpc` if regenerating stubs from `references/opensnitch/proto/ui.proto`
+- (Optional) **YARA** support: cgo + libyara (e.g., `brew install yara`, `apt-get install libyara-dev`). Disable with `-tags no_yara`.
 
 ## 🚀 Quickstart
 ```bash
@@ -26,14 +36,16 @@ Common flags:
 Default location: `~/.config/opensnitch-tui/config.yaml`
 
 ```yaml
-theme: auto
-nodes:
-	- id: primary
-		name: workstation
-		address: 127.0.0.1:50051
-		cert_path: /etc/opensnitch/ui/client.crt
-		key_path: /etc/opensnitch/ui/client.key
-		skip_tls: false
+theme: midnight
+default_prompt_action: deny
+default_prompt_duration: always
+default_prompt_target: process.path
+prompt_timeout_seconds: 300
+alerts_interrupt: false
+pause_prompt_on_inspect: true
+yara_rule_dir: /opt/yara_rules
+yara_enabled: true
+nodes: []
 ```
 
 ## 🧭 Usage (key hints)
@@ -41,6 +53,12 @@ nodes:
 - **Rules view:** `e` enable · `d` disable · `x` delete · `m` modify
 - **Prompt dialog:** arrows to move focus/choices; `a` allow · `d` deny · `r` reject
 - **Tables:** arrows to move; PgUp/PgDn/Home/End for paging
+
+## 🔍 YARA scanning (optional)
+- **Build requirements:** cgo enabled + **libyara** installed (`brew install yara` · `apt-get install libyara-dev`). Uses `github.com/hillu/go-yara/v4`.
+- **Enable/disable:** set `yara_enabled: true|false` in config or toggle in **Settings → Security**. Default: `false`.
+- **Rule directory:** set `yara_rule_dir: /path/to/yara_rules` (files ending in `.yar` / `.yara`). Rules are compiled once per directory and cached.
+- **Disable at build time:** `go build -tags no_yara` (or `CGO_ENABLED=0`) uses a stub; YARA features will surface `yara not available`.
 
 ## 🗂 Repository Layout
 - `cmd/opensnitch-tui/` — CLI entrypoint
@@ -67,15 +85,3 @@ nodes:
 - Keep **unit tests** green (`go test ./...`)
 - Add table/render tests under `internal/ui/views/...` when altering layout/keys
 - Snapshot/VT tests can be introduced under `internal/ui/view/viewtest` (none shipped yet)
-
-## 📦 Release/Dist (future)
-- Plan for `goreleaser` with Linux amd64/arm64 static builds
-- Package sample config, man page, shell completions
-
-## 🧱 Project Status
-Active development. Implemented: router, dashboard/events/alerts/rules/nodes/settings views, rule editing, prompt UI scaffolding. Upcoming: live gRPC wiring, firewall view, full parity with Qt UI.
-
-## 🤝 Contributing
-- Follow `AGENTS.md`
-- Keep comments minimal; prefer self-documenting code
-- Always run `make test` before sending changes
