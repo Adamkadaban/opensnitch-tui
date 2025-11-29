@@ -16,7 +16,7 @@ TUI for [OpenSnitch](https://github.com/evilsocket/opensnitch) that includes a y
 ## 🧰 Requirements
 - **Go** `1.24+`
 - **golangci-lint** `>= 1.56` (for `make lint`)
-- (Optional) **protoc** + `protoc-gen-go`/`protoc-gen-go-grpc` if regenerating stubs from `references/opensnitch/proto/ui.proto`
+- (Optional) **protoc** + `protoc-gen-go`/`protoc-gen-go-grpc` if regenerating stubs from `opensnitch/proto/ui.proto`
 - (Optional) **YARA** support: cgo + libyara (e.g., `brew install yara`, `apt-get install libyara-dev`). Disable with `-tags no_yara`.
 
 ## 🚀 Quickstart
@@ -67,19 +67,15 @@ nodes: []
 - `internal/ui/` — router and views (dashboard, events, alerts, rules, nodes, settings, prompt)
 - `internal/daemon/` — mock/server shim for tests; notification plumbing
 - `internal/controller/` — interfaces for rule/prompt/settings managers
-- `internal/pb/protocol/` — generated gRPC/proto stubs (from `references/opensnitch/proto/ui.proto`)
+- `internal/pb/protocol/` — generated gRPC/proto stubs (from `opensnitch/proto/ui.proto`)
 - `internal/config/` — YAML config loader
 - `internal/theme/` — lipgloss styles
-- `internal/util/` — misc helpers (ANSI-safe slicing, padding, display names)
-- `references/` — vendored upstreams
-	- `references/opensnitch/` — upstream daemon/UI/proto (read-only; regenerate stubs when upstream changes)
-	- `references/bubbletea/` — Bubble Tea reference copy for hacking/patching
+- `internal/util/` — misc helpers (ANSI-safe slicing, padding, display names)g
 
 ## 🛠 Build & Dev Workflow
 - **Format & lint:** `gofmt -w` (IDE/Go tools) and `make lint`
 - **Tests:** `make test` (aliases `go test ./...`)
-- **Regenerating protos:** from repo root, run `make -C references/opensnitch/proto` (requires `protoc` + Go plugins)
-- **Regenerating bubbletea:** commit local patches under `references/bubbletea`; keep module pins in sync
+- **Regenerating protos:** from repo root, run `make -C opensnitch/proto` (requires `protoc` + Go plugins)
 
 ## 🔍 Testing Notes
 - Keep **unit tests** green (`go test ./...`)
