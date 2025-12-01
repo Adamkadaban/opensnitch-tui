@@ -21,7 +21,7 @@ TUI for [OpenSnitch](https://github.com/evilsocket/opensnitch) that includes a y
 
 ## 🚀 Quickstart
 ```bash
-make build   # compile
+make build   # builds ./bin/opensnitch-tui
 make lint    # golangci-lint run
 make test    # go test ./...
 

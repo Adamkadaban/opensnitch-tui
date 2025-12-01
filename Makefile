@@ -2,10 +2,14 @@ SHELL := /bin/sh
 GO ?= go
 BINARY := opensnitch-tui
 CMD := ./cmd/opensnitch-tui
+BIN_DIR := ./bin
 ARGS ?=
 
 .PHONY: build
-build:
+build: $(BIN_DIR)/$(BINARY)
+
+.PHONY: build-all
+build-all:
 	$(GO) build ./...
 
 .PHONY: test
@@ -19,6 +23,10 @@ lint:
 .PHONY: run
 run:
 	$(GO) run $(CMD) $(ARGS)
+
+$(BIN_DIR)/$(BINARY):
+	mkdir -p $(BIN_DIR)
+	$(GO) build -o $(BIN_DIR)/$(BINARY) $(CMD)
 
 .PHONY: proto
 proto:
