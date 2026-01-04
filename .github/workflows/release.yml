@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies for cross-compilation
         run: |
           sudo apt-get update
-          sudo apt-get install -y libyara-dev gcc-aarch64-linux-gnu gcc-mingw-w64
+          sudo apt-get install -y libyara-dev gcc-aarch64-linux-gnu
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
