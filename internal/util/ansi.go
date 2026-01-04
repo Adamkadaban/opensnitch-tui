@@ -7,13 +7,18 @@ import (
 	"unicode/utf8"
 )
 
+// isAlpha returns true if b is an ASCII letter (A-Z or a-z).
+func isAlpha(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
 // StripANSI removes ANSI escape sequences from s.
 func StripANSI(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
 			j := i + 2
-			for j < len(s) && (s[j] < 'A' || s[j] > 'Z') && (s[j] < 'a' || s[j] > 'z') {
+			for j < len(s) && !isAlpha(s[j]) {
 				j++
 			}
 			if j < len(s) {
@@ -37,7 +42,7 @@ func AnsiSlice(s string, offset, width int) string {
 	for i := 0; i < len(s); {
 		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
 			j := i + 2
-			for j < len(s) && (s[j] < 'A' || s[j] > 'Z') && (s[j] < 'a' || s[j] > 'z') {
+			for j < len(s) && !isAlpha(s[j]) {
 				j++
 			}
 			if j < len(s) {
