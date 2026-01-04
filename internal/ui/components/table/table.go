@@ -1,3 +1,5 @@
+// Package table provides utilities for rendering and formatting
+// tabular data with ANSI escape sequence support.
 package table
 
 import (

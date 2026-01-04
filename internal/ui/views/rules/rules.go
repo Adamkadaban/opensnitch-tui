@@ -1,3 +1,5 @@
+// Package rules implements the rules view for managing firewall rules
+// including enabling, disabling, modifying, and deleting rules.
 package rules
 
 import (

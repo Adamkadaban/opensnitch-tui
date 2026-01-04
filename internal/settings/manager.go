@@ -1,3 +1,5 @@
+// Package settings manages persistence of user preferences and
+// application configuration to YAML files.
 package settings
 
 import (

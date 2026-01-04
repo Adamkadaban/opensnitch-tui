@@ -1,3 +1,5 @@
+// Package keymap defines keyboard shortcuts and key bindings
+// for navigation and actions in the TUI.
 package keymap
 
 import (

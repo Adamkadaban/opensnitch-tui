@@ -1,3 +1,5 @@
+// Package controller defines interfaces for managing rules, prompts,
+// and settings across the application.
 package controller
 
 import "github.com/adamkadaban/opensnitch-tui/internal/state"

@@ -1,3 +1,5 @@
+// Package widget provides reusable UI components for building
+// interactive forms and option selectors.
 package widget
 
 import (

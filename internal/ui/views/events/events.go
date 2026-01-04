@@ -1,3 +1,5 @@
+// Package events implements the events view that displays recent
+// network connection events and their associated rules.
 package events
 
 import (

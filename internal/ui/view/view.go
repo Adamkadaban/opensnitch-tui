@@ -1,3 +1,5 @@
+// Package view defines the interface for Bubble Tea view models
+// used in the application's routing system.
 package view
 
 import (

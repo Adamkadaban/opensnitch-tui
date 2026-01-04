@@ -1,3 +1,5 @@
+// Package root implements the main application router that coordinates
+// between different views and manages global navigation and state.
 package root
 
 import (

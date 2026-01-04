@@ -1,3 +1,5 @@
+// Package alerts implements the alerts view for displaying
+// security and system notifications from the daemon.
 package alerts
 
 import (

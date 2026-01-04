@@ -1,3 +1,5 @@
+// Package nodes implements the nodes view for managing and monitoring
+// connected OpenSnitch daemon instances.
 package nodes
 
 import (

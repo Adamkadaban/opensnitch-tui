@@ -1,3 +1,5 @@
+// Package yara provides YARA rule scanning capabilities with optional
+// support via cgo bindings to libyara.
 package yara
 
 import "errors"

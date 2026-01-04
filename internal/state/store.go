@@ -1,3 +1,5 @@
+// Package state provides centralized thread-safe state management
+// with a pub/sub pattern for reactive updates across the application.
 package state
 
 import (

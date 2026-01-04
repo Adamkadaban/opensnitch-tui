@@ -1,3 +1,5 @@
+// Package dashboard implements the main dashboard view displaying
+// statistics and top connections from the OpenSnitch daemon.
 package dashboard
 
 import (

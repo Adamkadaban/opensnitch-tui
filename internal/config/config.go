@@ -1,3 +1,5 @@
+// Package config handles loading, validation, and persistence of
+// application configuration from YAML files.
 package config
 
 import (

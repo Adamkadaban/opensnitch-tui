@@ -1,3 +1,5 @@
+// Package prompt implements the connection prompt dialog that allows
+// users to interactively allow, deny, or reject network connections.
 package prompt
 
 import (

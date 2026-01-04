@@ -1,3 +1,5 @@
+// Package app wires together the application components including
+// configuration, state, daemon server, and Bubble Tea UI.
 package app
 
 import (

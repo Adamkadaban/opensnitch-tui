@@ -1,3 +1,5 @@
+// Package daemon implements the gRPC server for handling connections
+// from OpenSnitch daemon instances and managing rules and prompts.
 package daemon
 
 import (

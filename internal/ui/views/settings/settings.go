@@ -1,3 +1,5 @@
+// Package settings implements the settings view for configuring
+// application preferences such as themes, prompts, and YARA scanning.
 package settings
 
 import (

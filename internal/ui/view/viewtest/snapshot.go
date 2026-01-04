@@ -1,3 +1,5 @@
+// Package viewtest provides utilities for snapshot testing of
+// view rendering output in unit tests.
 package viewtest
 
 import (

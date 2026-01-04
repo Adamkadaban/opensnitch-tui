@@ -1,3 +1,5 @@
+// Package theme provides lipgloss-based color palettes and styling
+// for the TUI interface with support for multiple themes.
 package theme
 
 import (
