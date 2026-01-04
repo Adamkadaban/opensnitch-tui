@@ -1,15 +1,29 @@
+version: 2
+
 run:
   timeout: 3m
   tests: true
+  build-tags:
+    - no_yara
+
 linters:
   enable:
     - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - misspell
+    - gocyclo
+    - goconst
+    - gocritic
+    - revive
+
+formatters:
+  enable:
     - gofmt
     - goimports
-    - govet
-    - gosimple
-    - revive
-    - staticcheck
+
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
