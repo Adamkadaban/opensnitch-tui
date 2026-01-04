@@ -77,6 +77,23 @@ nodes: []
 - **Tests:** `make test` (aliases `go test ./...`)
 - **Regenerating protos:** from repo root, run `make -C opensnitch/proto` (requires `protoc` + Go plugins)
 
+## 📦 Releases
+Precompiled binaries are automatically built and published when a new version tag is pushed:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The GitHub Actions workflow will:
+- Build binaries for Linux (amd64, arm64) with YARA support
+- Build binaries for Windows (amd64, arm64) without YARA support
+- Package binaries with LICENSE and README
+- Create a GitHub release with all artifacts and a changelog
+- Generate checksums for verification
+
+Download the latest release from the [Releases page](https://github.com/Adamkadaban/opensnitch-tui/releases).
+
 ## 🔍 Testing Notes
 - Keep **unit tests** green (`go test ./...`)
 - Add table/render tests under `internal/ui/views/...` when altering layout/keys
