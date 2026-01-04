@@ -34,3 +34,6 @@ go.work.sum
 AGENTS.md
 bin/
 references/
+
+# GoReleaser
+dist/
