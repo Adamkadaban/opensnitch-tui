@@ -21,6 +21,13 @@ type Model struct {
 	height int
 }
 
+const (
+	cardHorizontalFrame = 8
+	minStatCardWidth    = 24
+	minTopCardWidth     = 28
+	minTrafficCardWidth = 32
+)
+
 // New creates a dashboard view backed by the provided store.
 func New(store *state.Store, th theme.Theme) view.Model {
 	return &Model{store: store, theme: th}
@@ -41,23 +48,26 @@ func (m *Model) View() string {
 	snapshot := m.store.Snapshot()
 	stats := snapshot.Stats
 
+	statColumns := cardColumns(m.width, minStatCardWidth)
+	statWidth := max(1, m.width/statColumns)
 	cards := []string{
-		m.renderStat("Rules", stats.Rules),
-		m.renderStat("Connections", stats.Connections),
-		m.renderStat("Accepted", stats.Accepted),
-		m.renderStat("Dropped", stats.Dropped),
+		m.renderStat("Rules", stats.Rules, statWidth, statColumns < 4),
+		m.renderStat("Connections", stats.Connections, statWidth, statColumns < 4),
+		m.renderStat("Accepted", stats.Accepted, statWidth, statColumns < 4),
+		m.renderStat("Dropped", stats.Dropped, statWidth, statColumns < 4),
 	}
 
-	row := lipgloss.JoinHorizontal(lipgloss.Top, cards...)
-	trafficWidth := max(24, m.width/3)
+	row := joinCardGrid(cards, statColumns)
+	trafficWidth := min(m.width, max(minTrafficCardWidth, m.width/3))
 	insights := m.renderTraffic(stats, trafficWidth)
-	colWidth := max(20, m.width/4)
-	secondary := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderTopList("Top destinations", stats.TopDestHosts, colWidth),
-		m.renderTopList("Top ports", stats.TopDestPorts, colWidth),
-		m.renderTopList("Top executables", stats.TopExecutables, colWidth),
-		m.renderTopList("Top users", stats.TopUsers, colWidth),
-	)
+	topColumns := cardColumns(m.width, minTopCardWidth)
+	topWidth := max(1, m.width/topColumns)
+	secondary := joinCardGrid([]string{
+		m.renderTopList("Top destinations", stats.TopDestHosts, topWidth, topColumns < 4),
+		m.renderTopList("Top ports", stats.TopDestPorts, topWidth, topColumns < 4),
+		m.renderTopList("Top executables", stats.TopExecutables, topWidth, topColumns < 4),
+		m.renderTopList("Top users", stats.TopUsers, topWidth, topColumns < 4),
+	}, topColumns)
 	meta := m.theme.Subtle.Render(m.metaLine(stats))
 	body := lipgloss.JoinVertical(lipgloss.Left, row, insights, secondary, meta)
 
@@ -78,14 +88,14 @@ func (m *Model) SetTheme(th theme.Theme) {
 	m.theme = th
 }
 
-func (m *Model) renderStat(label string, value uint64) string {
-	const cardOverhead = 8 // border (2) + padding (4) + margin (2)
-	cardWidth := max(16, m.width/4-cardOverhead)
+func (m *Model) renderStat(label string, value uint64, totalWidth int, compact bool) string {
+	cardWidth := max(1, totalWidth-cardHorizontalFrame)
 	content := fmt.Sprintf("%d\n%s", value, label)
-	return m.theme.Card.Width(cardWidth).Render(content)
+	return m.cardStyle(compact).Width(cardWidth).Render(content)
 }
 
-func (m *Model) renderTraffic(stats state.Stats, cardWidth int) string {
+func (m *Model) renderTraffic(stats state.Stats, totalWidth int) string {
+	cardWidth := max(1, totalWidth-cardHorizontalFrame)
 	title := m.theme.Title.Render("Traffic mix")
 	segments := []struct {
 		label string
@@ -110,11 +120,11 @@ func (m *Model) renderTraffic(stats state.Stats, cardWidth int) string {
 	return m.theme.Card.Width(cardWidth).Render(strings.Join(body, "\n"))
 }
 
-func (m *Model) renderTopList(title string, buckets []state.StatBucket, width int) string {
-	cardWidth := max(20, width-4)
+func (m *Model) renderTopList(title string, buckets []state.StatBucket, totalWidth int, compact bool) string {
+	cardWidth := max(1, totalWidth-cardHorizontalFrame)
 	head := m.theme.Title.Render(title)
 	if len(buckets) == 0 {
-		return m.theme.Card.Width(cardWidth).Render(head + "\n" + m.theme.Subtle.Render("Waiting for data"))
+		return m.cardStyle(compact).Width(cardWidth).Render(head + "\n" + m.theme.Subtle.Render("Waiting for data"))
 	}
 	lines := make([]string, 0, len(buckets)+1)
 	lines = append(lines, head)
@@ -128,7 +138,7 @@ func (m *Model) renderTopList(title string, buckets []state.StatBucket, width in
 		lines = append(lines, trimToWidth(bucket.Label, cardWidth-2))
 		lines = append(lines, fmt.Sprintf("%-*s %6d", barWidth+1, bar, bucket.Value))
 	}
-	return m.theme.Card.Width(cardWidth).Render(strings.Join(lines, "\n"))
+	return m.cardStyle(compact).Width(cardWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) renderBreakdownLine(label string, value, total uint64, style lipgloss.Style, width int) string {
@@ -170,6 +180,33 @@ func filledWidth(value, total uint64, width int) int {
 
 func trimToWidth(value string, width int) string {
 	return util.TruncateString(value, width)
+}
+
+func cardColumns(width, minimumWidth int) int {
+	switch {
+	case width >= minimumWidth*4:
+		return 4
+	case width >= minimumWidth*2:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func joinCardGrid(cards []string, columns int) string {
+	rows := make([]string, 0, (len(cards)+columns-1)/columns)
+	for start := 0; start < len(cards); start += columns {
+		end := min(len(cards), start+columns)
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, cards[start:end]...))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+func (m *Model) cardStyle(compact bool) lipgloss.Style {
+	if compact {
+		return m.theme.Card.Padding(0, 2)
+	}
+	return m.theme.Card
 }
 
 func (m *Model) metaLine(stats state.Stats) string {
