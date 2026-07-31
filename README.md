@@ -80,4 +80,6 @@ nodes: []
 ## 🔍 Testing Notes
 - Keep **unit tests** green (`go test ./...`)
 - Add table/render tests under `internal/ui/views/...` when altering layout/keys
-- Snapshot/VT tests can be introduced under `internal/ui/view/viewtest` (none shipped yet)
+- Use `make capture-ui` to record deterministic screenshots before and after navigation inputs
+- Visual captures require [`tmux`](https://github.com/tmux/tmux) and [`freeze`](https://github.com/charmbracelet/freeze)
+- Captures are written under ignored `artifacts/tui-captures/`; never commit captures from a real daemon or production environment

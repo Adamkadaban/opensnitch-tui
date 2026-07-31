@@ -24,6 +24,10 @@ lint:
 run:
 	$(GO) run $(CMD) $(ARGS)
 
+.PHONY: capture-ui
+capture-ui:
+	./scripts/capture-tui.sh
+
 $(BIN_DIR)/$(BINARY):
 	mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/$(BINARY) $(CMD)
