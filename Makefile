@@ -6,7 +6,9 @@ BIN_DIR := ./bin
 ARGS ?=
 
 .PHONY: build
-build: $(BIN_DIR)/$(BINARY)
+build:
+	mkdir -p $(BIN_DIR)
+	$(GO) build -o $(BIN_DIR)/$(BINARY) $(CMD)
 
 .PHONY: build-all
 build-all:
@@ -27,10 +29,6 @@ run:
 .PHONY: capture-ui
 capture-ui:
 	./scripts/capture-tui.sh
-
-$(BIN_DIR)/$(BINARY):
-	mkdir -p $(BIN_DIR)
-	$(GO) build -o $(BIN_DIR)/$(BINARY) $(CMD)
 
 .PHONY: proto
 proto:
