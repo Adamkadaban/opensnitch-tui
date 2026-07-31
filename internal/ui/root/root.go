@@ -152,9 +152,9 @@ func (m *Model) View() string {
 		}
 	}
 	snapshot := m.store.Snapshot()
-	footerWidth := max(1, m.width-m.theme.Footer.GetHorizontalFrameSize())
-	footerLine := util.AnsiSlice(m.footerLine(snapshot), 0, footerWidth)
-	footer := m.theme.Footer.Width(footerWidth).Render(footerLine)
+	footerTextWidth := max(1, m.width-m.theme.Footer.GetHorizontalFrameSize())
+	footerLine := util.AnsiSlice(m.footerLine(snapshot), 0, footerTextWidth)
+	footer := m.theme.Footer.Width(max(1, m.width)).Render(footerLine)
 
 	return lipgloss.JoinVertical(lipgloss.Left, headline, body, footer)
 }
@@ -264,8 +264,8 @@ func (m *Model) resize() {
 	if m.width <= 0 || m.height <= 0 {
 		return
 	}
-	viewWidth := max(1, m.width-m.theme.Body.GetHorizontalFrameSize())
-	viewHeight := max(1, m.height-2-m.theme.Body.GetVerticalFrameSize())
+	viewWidth := max(1, m.width)
+	viewHeight := max(1, m.height-2)
 	for _, v := range m.views {
 		v.SetSize(viewWidth, viewHeight)
 	}
