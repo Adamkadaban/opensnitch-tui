@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +11,79 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"google.golang.org/grpc/peer"
 )
+
+func TestServerAskRuleCancelWhilePaused(t *testing.T) {
+	store := state.NewStore()
+	nodeAddr := "1.2.3.4:6000"
+	nodeID := "tcp://" + nodeAddr
+	store.SetStats(state.Stats{NodeID: nodeID})
+	settings := store.Snapshot().Settings
+	settings.PromptTimeout = 5 * time.Second
+	store.SetSettings(settings)
+	srv := New(store, Options{})
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	ctx := peer.NewContext(baseCtx, &peer.Peer{Addr: &testAddr{network: "tcp", value: nodeAddr}})
+	conn := &pb.Connection{
+		ProcessPath: "/usr/bin/curl",
+		DstHost:     "example.com",
+		DstPort:     443,
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := srv.AskRule(ctx, conn)
+		result <- err
+	}()
+
+	var promptID string
+	deadline := time.Now().Add(time.Second)
+	for promptID == "" && time.Now().Before(deadline) {
+		prompts := store.Snapshot().Prompts
+		if len(prompts) > 0 {
+			promptID = prompts[0].ID
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if promptID == "" {
+		t.Fatal("prompt was not registered")
+	}
+
+	req := srv.promptByID(promptID)
+	if req == nil {
+		t.Fatal("prompt request was not registered")
+	}
+	if err := srv.PausePrompt(promptID); err != nil {
+		t.Fatalf("pause prompt: %v", err)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for len(req.pauseCh) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(req.pauseCh) != 0 {
+		t.Fatal("AskRule did not enter paused state")
+	}
+
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AskRule did not return after context cancellation")
+	}
+
+	if prompts := store.Snapshot().Prompts; len(prompts) != 0 {
+		t.Fatalf("expected prompt removal, got %d prompts", len(prompts))
+	}
+	if srv.promptByID(promptID) != nil {
+		t.Fatal("expected prompt request cleanup")
+	}
+}
 
 func TestParseListenAddr(t *testing.T) {
 	tests := []struct {
