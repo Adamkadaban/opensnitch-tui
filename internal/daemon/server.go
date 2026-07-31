@@ -134,8 +134,8 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 	if target.network == "unix" {
-		if err := os.Remove(target.address); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale socket: %w", err)
+		if err := removeStaleUnixSocket(target.address); err != nil {
+			return err
 		}
 	}
 	lis, err := net.Listen(target.network, target.address)
