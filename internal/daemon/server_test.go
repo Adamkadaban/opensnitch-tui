@@ -150,6 +150,16 @@ func TestServerSubscribeStoresRules(t *testing.T) {
 		Name:              "daemon",
 		Version:           "1",
 		IsFirewallRunning: true,
+		SystemFirewall: &pb.SysFirewall{
+			Enabled: true,
+			Version: 2,
+			SystemRules: []*pb.FwChains{{
+				Chains: []*pb.FwChain{{
+					Name:   "output",
+					Policy: "accept",
+				}},
+			}},
+		},
 		Rules: []*pb.Rule{{
 			Name: "ssh",
 			Operator: &pb.Operator{
@@ -165,6 +175,34 @@ func TestServerSubscribeStoresRules(t *testing.T) {
 	snap := store.Snapshot()
 	if len(snap.Rules["tcp://1.2.3.4:5000"]) != 1 {
 		t.Fatalf("expected rules stored for node, got %+v", snap.Rules)
+	}
+	firewall, ok := snap.SystemFirewalls["tcp://1.2.3.4:5000"]
+	if !ok {
+		t.Fatal("expected system firewall stored for node")
+	}
+	if !firewall.Enabled || !firewall.Running || firewall.Version != 2 {
+		t.Fatalf("unexpected system firewall status: %+v", firewall)
+	}
+	if got := firewall.SystemRules[0].Chains[0].Policy; got != "accept" {
+		t.Fatalf("expected firewall policy accept, got %q", got)
+	}
+}
+
+func TestServerSubscribeWithoutSystemFirewall(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &testAddr{network: "tcp", value: "1.2.3.4:5001"}})
+	store.SetSystemFirewall("tcp://1.2.3.4:5001", state.SystemFirewall{Enabled: true})
+
+	if _, err := srv.Subscribe(ctx, &pb.ClientConfig{IsFirewallRunning: true}); err != nil {
+		t.Fatalf("Subscribe error: %v", err)
+	}
+	snap := store.Snapshot()
+	if _, ok := snap.SystemFirewalls["tcp://1.2.3.4:5001"]; ok {
+		t.Fatal("did not expect firewall state for older daemon payload")
+	}
+	if len(snap.Nodes) != 1 || !snap.Nodes[0].FirewallEnabled {
+		t.Fatalf("expected legacy running status to remain available, got %+v", snap.Nodes)
 	}
 }
 

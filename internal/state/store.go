@@ -35,9 +35,10 @@ type Subscription struct {
 func NewStore() *Store {
 	return &Store{
 		snapshot: Snapshot{
-			ActiveView: ViewDashboard,
-			Nodes:      []Node{},
-			Rules:      make(map[string][]Rule),
+			ActiveView:      ViewDashboard,
+			Nodes:           []Node{},
+			Rules:           make(map[string][]Rule),
+			SystemFirewalls: make(map[string]SystemFirewall),
 			Settings: Settings{
 				ThemeName:             config.DefaultThemeName,
 				DefaultPromptAction:   config.DefaultPromptAction,
@@ -64,6 +65,7 @@ func (s *Store) Snapshot() Snapshot {
 	copySnap.Nodes = cloneNodes(s.snapshot.Nodes)
 	copySnap.Alerts = cloneAlerts(s.snapshot.Alerts)
 	copySnap.Rules = cloneRulesMap(s.snapshot.Rules)
+	copySnap.SystemFirewalls = cloneFirewallsMap(s.snapshot.SystemFirewalls)
 	copySnap.Settings = s.snapshot.Settings
 	copySnap.Stats = cloneStats(s.snapshot.Stats)
 	copySnap.Prompts = clonePrompts(s.snapshot.Prompts)
@@ -295,6 +297,64 @@ func (s *Store) RemoveRule(nodeID, ruleName string) bool {
 	return false
 }
 
+// SetSystemFirewall replaces the system firewall state for a node.
+func (s *Store) SetSystemFirewall(nodeID string, firewall SystemFirewall) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.snapshot.SystemFirewalls == nil {
+		s.snapshot.SystemFirewalls = make(map[string]SystemFirewall)
+	}
+	firewall.NodeID = nodeID
+	s.snapshot.SystemFirewalls[nodeID] = cloneSystemFirewall(firewall)
+	s.notifyLocked()
+}
+
+// SystemFirewall returns the system firewall state for a node.
+func (s *Store) SystemFirewall(nodeID string) (SystemFirewall, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	firewall, ok := s.snapshot.SystemFirewalls[nodeID]
+	if !ok {
+		return SystemFirewall{}, false
+	}
+	return cloneSystemFirewall(firewall), true
+}
+
+// UpdateSystemFirewall mutates the system firewall state for a node.
+func (s *Store) UpdateSystemFirewall(nodeID string, fn func(*SystemFirewall)) bool {
+	if fn == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	firewall, ok := s.snapshot.SystemFirewalls[nodeID]
+	if !ok {
+		return false
+	}
+	firewall = cloneSystemFirewall(firewall)
+	fn(&firewall)
+	firewall.NodeID = nodeID
+	s.snapshot.SystemFirewalls[nodeID] = cloneSystemFirewall(firewall)
+	s.notifyLocked()
+	return true
+}
+
+// RemoveSystemFirewall removes the system firewall state for a node.
+func (s *Store) RemoveSystemFirewall(nodeID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.snapshot.SystemFirewalls[nodeID]; !ok {
+		return false
+	}
+	delete(s.snapshot.SystemFirewalls, nodeID)
+	s.notifyLocked()
+	return true
+}
+
 // AddPrompt enqueues a pending connection prompt.
 func (s *Store) AddPrompt(prompt Prompt) {
 	s.mu.Lock()
@@ -467,6 +527,89 @@ func cloneRulesMap(rules map[string][]Rule) map[string][]Rule {
 	return copyMap
 }
 
+func cloneFirewallsMap(firewalls map[string]SystemFirewall) map[string]SystemFirewall {
+	if len(firewalls) == 0 {
+		return nil
+	}
+	copyMap := make(map[string]SystemFirewall, len(firewalls))
+	for nodeID, firewall := range firewalls {
+		copyMap[nodeID] = cloneSystemFirewall(firewall)
+	}
+	return copyMap
+}
+
+func cloneSystemFirewall(firewall SystemFirewall) SystemFirewall {
+	if len(firewall.SystemRules) == 0 {
+		firewall.SystemRules = nil
+		return firewall
+	}
+	groups := make([]FirewallRuleGroup, len(firewall.SystemRules))
+	for i, group := range firewall.SystemRules {
+		groups[i] = cloneFirewallRuleGroup(group)
+	}
+	firewall.SystemRules = groups
+	return firewall
+}
+
+func cloneFirewallRuleGroup(group FirewallRuleGroup) FirewallRuleGroup {
+	if group.Rule != nil {
+		rule := cloneFirewallRule(*group.Rule)
+		group.Rule = &rule
+	}
+	if len(group.Chains) == 0 {
+		group.Chains = nil
+		return group
+	}
+	chains := make([]FirewallChain, len(group.Chains))
+	for i, chain := range group.Chains {
+		chains[i] = cloneFirewallChain(chain)
+	}
+	group.Chains = chains
+	return group
+}
+
+func cloneFirewallChain(chain FirewallChain) FirewallChain {
+	if len(chain.Rules) == 0 {
+		chain.Rules = nil
+		return chain
+	}
+	rules := make([]FirewallRule, len(chain.Rules))
+	for i, rule := range chain.Rules {
+		rules[i] = cloneFirewallRule(rule)
+	}
+	chain.Rules = rules
+	return chain
+}
+
+func cloneFirewallRule(rule FirewallRule) FirewallRule {
+	if len(rule.Expressions) == 0 {
+		rule.Expressions = nil
+		return rule
+	}
+	expressions := make([]FirewallExpression, len(rule.Expressions))
+	for i, expression := range rule.Expressions {
+		expressions[i] = cloneFirewallExpression(expression)
+	}
+	rule.Expressions = expressions
+	return rule
+}
+
+func cloneFirewallExpression(expression FirewallExpression) FirewallExpression {
+	if expression.Statement == nil {
+		return expression
+	}
+	statement := *expression.Statement
+	if len(statement.Values) == 0 {
+		statement.Values = nil
+	} else {
+		values := make([]FirewallStatementValue, len(statement.Values))
+		copy(values, statement.Values)
+		statement.Values = values
+	}
+	expression.Statement = &statement
+	return expression
+}
+
 func clonePrompts(prompts []Prompt) []Prompt {
 	if len(prompts) == 0 {
 		return nil
@@ -492,7 +635,11 @@ func cloneEvents(events []Event) []Event {
 		return nil
 	}
 	copyEvents := make([]Event, len(events))
-	copy(copyEvents, events)
+	for i, event := range events {
+		event.Connection = cloneConnection(event.Connection)
+		event.Rule = cloneRule(event.Rule)
+		copyEvents[i] = event
+	}
 	return copyEvents
 }
 

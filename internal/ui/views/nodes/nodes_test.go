@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,4 +47,17 @@ func TestNodesViewPopulatedSnapshot(t *testing.T) {
 	m.SetSize(90, 14)
 
 	viewtest.AssertSnapshot(t, m.View(), filepath.Join("testdata", "nodes_populated.snap"))
+}
+
+func TestNodeDetailsUsesSystemFirewallState(t *testing.T) {
+	node := state.Node{FirewallEnabled: true}
+	firewall := state.SystemFirewall{Enabled: true}
+
+	details := nodeDetails(node, firewall, true)
+	if !strings.Contains(details, "firewall: enabled (stopped)") {
+		t.Fatalf("expected configured firewall status, got %q", details)
+	}
+	if strings.Contains(details, "firewall: on") {
+		t.Fatalf("expected system firewall state to supersede legacy status, got %q", details)
+	}
 }

@@ -171,6 +171,11 @@ func (s *Server) Subscribe(ctx context.Context, cfg *pb.ClientConfig) (*pb.Clien
 	node.LastSeen = time.Now()
 	s.store.UpsertNode(node)
 	s.store.SetRules(node.ID, convertRules(cfg.GetRules(), node.ID))
+	if firewall, ok := convertSystemFirewall(cfg.GetSystemFirewall(), node.ID, cfg.GetIsFirewallRunning()); ok {
+		s.store.SetSystemFirewall(node.ID, firewall)
+	} else {
+		s.store.RemoveSystemFirewall(node.ID)
+	}
 
 	return &pb.ClientConfig{
 		Id:                cfg.GetId(),

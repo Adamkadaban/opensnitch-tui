@@ -59,7 +59,8 @@ func (m *Model) View() string {
 	for idx, node := range nodes {
 		label := fmt.Sprintf("%02d · %s", idx+1, labelForNode(node))
 		status := m.statusStyle(node.Status).Render(strings.ToUpper(string(node.Status)))
-		meta := nodeDetails(node)
+		firewall, hasFirewall := snapshot.SystemFirewalls[node.ID]
+		meta := nodeDetails(node, firewall, hasFirewall)
 
 		row := lipgloss.JoinHorizontal(lipgloss.Top,
 			m.theme.Title.Width(max(20, m.width/3)).Render(label),
@@ -97,7 +98,7 @@ func (m *Model) statusStyle(status state.NodeStatus) lipgloss.Style {
 	}
 }
 
-func nodeDetails(node state.Node) string {
+func nodeDetails(node state.Node, firewall state.SystemFirewall, hasFirewall bool) string {
 	parts := []string{}
 	if node.Version != "" {
 		parts = append(parts, fmt.Sprintf("v%s", node.Version))
@@ -108,7 +109,14 @@ func nodeDetails(node state.Node) string {
 	if !node.LastSeen.IsZero() {
 		parts = append(parts, fmt.Sprintf("seen %s ago", time.Since(node.LastSeen).Truncate(time.Second)))
 	}
-	if node.FirewallEnabled {
+	switch {
+	case hasFirewall && firewall.Running:
+		parts = append(parts, "firewall: running")
+	case hasFirewall && firewall.Enabled:
+		parts = append(parts, "firewall: enabled (stopped)")
+	case hasFirewall:
+		parts = append(parts, "firewall: off")
+	case node.FirewallEnabled:
 		parts = append(parts, "firewall: on")
 	}
 	if len(parts) == 0 {
