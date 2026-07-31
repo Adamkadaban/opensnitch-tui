@@ -12,13 +12,14 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
@@ -50,16 +51,23 @@ type Server struct {
 	opts  Options
 	grpc  *grpc.Server
 
-	sessions    map[string]*session
-	sessionsMu  sync.Mutex
-	notifySeqID uint64
-	prompts     map[string]*promptRequest
-	promptsMu   sync.Mutex
+	sessions       map[string]*session
+	sessionsMu     sync.RWMutex
+	sessionsClosed bool
+	notifySeqID    uint64
+	prompts        map[string]*promptRequest
+	promptsMu      sync.Mutex
 }
 
 type session struct {
-	nodeID string
-	send   chan *pb.Notification
+	nodeID    string
+	send      chan *pb.Notification
+	done      chan struct{}
+	closeOnce sync.Once
+
+	mu       sync.Mutex
+	closeErr error
+	pending  map[uint64]chan *pb.NotificationReply
 }
 
 type promptRequest struct {
@@ -145,6 +153,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
+		s.closeSessions(ctx.Err())
 		s.grpc.GracefulStop()
 	}()
 
@@ -188,36 +197,61 @@ func (s *Server) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingReply, 
 	return &pb.PingReply{Id: req.GetId()}, nil
 }
 
-// Notifications drains the streaming channel to keep the daemon connected.
+// Notifications exchanges daemon replies and server-initiated notifications.
 func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
 	nodeID := peerKey(stream.Context())
-	sess := s.registerSession(nodeID)
-	defer s.unregisterSession(nodeID, sess)
+	sess, err := s.registerSession(nodeID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrUnknownNotificationNode):
+			return status.Error(codes.InvalidArgument, err.Error())
+		case errors.Is(err, ErrDuplicateNotificationSession):
+			return status.Error(codes.AlreadyExists, err.Error())
+		case errors.Is(err, ErrNotificationSessionClosed):
+			return status.Error(codes.Unavailable, err.Error())
+		default:
+			return status.Error(codes.Internal, err.Error())
+		}
+	}
 
-	sendErr := make(chan error, 1)
-	go s.dispatchNotifications(stream, sess, sendErr)
+	closeCause := error(ErrNotificationSessionClosed)
+	defer func() {
+		s.unregisterSession(nodeID, sess, closeCause)
+	}()
+
+	replies := make(chan notificationReceive, 1)
+	go receiveNotificationReplies(stream.Context(), stream, replies)
 
 	for {
 		select {
-		case err := <-sendErr:
-			if err != nil {
+		case <-stream.Context().Done():
+			closeCause = stream.Context().Err()
+			s.store.UpdateNodeStatus(nodeID, state.NodeStatusDisconnected, closeCause.Error(), time.Now())
+			return closeCause
+		case <-sess.done:
+			closeCause = sess.closedError()
+			return nil
+		case notif := <-sess.send:
+			if err := stream.Send(notif); err != nil {
+				closeCause = err
 				s.store.UpdateNodeStatus(nodeID, state.NodeStatusError, err.Error(), time.Now())
 				return err
 			}
-			return nil
-		default:
+		case received := <-replies:
+			if received.err == io.EOF {
+				closeCause = ErrNotificationSessionClosed
+				s.store.UpdateNodeStatus(nodeID, state.NodeStatusDisconnected, "notifications closed", time.Now())
+				return nil
+			}
+			if received.err != nil {
+				closeCause = received.err
+				s.store.UpdateNodeStatus(nodeID, state.NodeStatusError, received.err.Error(), time.Now())
+				return received.err
+			}
+			if received.reply != nil {
+				sess.complete(received.reply)
+			}
 		}
-
-		reply, err := stream.Recv()
-		if err == io.EOF {
-			s.store.UpdateNodeStatus(nodeID, state.NodeStatusDisconnected, "notifications closed", time.Now())
-			return nil
-		}
-		if err != nil {
-			s.store.UpdateNodeStatus(nodeID, state.NodeStatusError, err.Error(), time.Now())
-			return err
-		}
-		_ = reply
 	}
 }
 
@@ -367,42 +401,6 @@ func (s *Server) nodeName(id string) string {
 	return id
 }
 
-func (s *Server) dispatchNotifications(stream pb.UI_NotificationsServer, sess *session, errCh chan<- error) {
-	for notif := range sess.send {
-		if err := stream.Send(notif); err != nil {
-			errCh <- err
-			return
-		}
-	}
-	errCh <- nil
-}
-
-func (s *Server) registerSession(nodeID string) *session {
-	sess := &session{nodeID: nodeID, send: make(chan *pb.Notification, 8)}
-	s.sessionsMu.Lock()
-	if existing, ok := s.sessions[nodeID]; ok {
-		if existing.send != nil {
-			close(existing.send)
-			existing.send = nil
-		}
-	}
-	s.sessions[nodeID] = sess
-	s.sessionsMu.Unlock()
-	return sess
-}
-
-func (s *Server) unregisterSession(nodeID string, sess *session) {
-	s.sessionsMu.Lock()
-	if current, ok := s.sessions[nodeID]; ok && current == sess {
-		delete(s.sessions, nodeID)
-	}
-	s.sessionsMu.Unlock()
-	if sess.send != nil {
-		close(sess.send)
-		sess.send = nil
-	}
-}
-
 func (s *Server) EnableRule(nodeID, ruleName string) error {
 	return s.enqueueRuleAction(nodeID, ruleName, pb.Action_ENABLE_RULE, func(rule *state.Rule) {
 		rule.Enabled = true
@@ -462,9 +460,8 @@ func (s *Server) enqueueRuleAction(nodeID, ruleName string, action pb.Action, mu
 }
 
 func (s *Server) newNotification(action pb.Action, nodeID string) *pb.Notification {
-	id := atomic.AddUint64(&s.notifySeqID, 1)
 	return &pb.Notification{
-		Id:         id,
+		Id:         s.nextNotificationID(),
 		Type:       action,
 		ServerName: s.opts.ServerName,
 		ClientName: nodeID,
@@ -472,18 +469,13 @@ func (s *Server) newNotification(action pb.Action, nodeID string) *pb.Notificati
 }
 
 func (s *Server) sendNotification(nodeID string, notif *pb.Notification) error {
-	s.sessionsMu.Lock()
+	s.sessionsMu.RLock()
 	sess, ok := s.sessions[nodeID]
-	s.sessionsMu.Unlock()
+	s.sessionsMu.RUnlock()
 	if !ok {
-		return fmt.Errorf("node %s not connected", nodeID)
+		return fmt.Errorf("%w: %s", ErrNotificationNodeDisconnected, nodeID)
 	}
-	select {
-	case sess.send <- notif:
-		return nil
-	default:
-		return fmt.Errorf("notification buffer full for %s", nodeID)
-	}
+	return sess.enqueue(notif)
 }
 
 func (s *Server) lookupRule(nodeID, ruleName string) (state.Rule, error) {
