@@ -15,11 +15,13 @@ type Store struct {
 	snapshot Snapshot
 	subs     map[int]*Subscription
 	nextSub  int
+	errorTTL time.Duration
 }
 
-const maxAlerts = 100
-
-var errorDisplayTTL = 10 * time.Second
+const (
+	maxAlerts              = 100
+	defaultErrorDisplayTTL = 10 * time.Second
+)
 
 // Subscription delivers notifications when the store mutates.
 type Subscription struct {
@@ -47,7 +49,8 @@ func NewStore() *Store {
 			},
 			Prompts: []Prompt{},
 		},
-		subs: make(map[int]*Subscription),
+		subs:     make(map[int]*Subscription),
+		errorTTL: defaultErrorDisplayTTL,
 	}
 }
 
@@ -393,7 +396,7 @@ func (s *Store) removeSubscription(id int) {
 }
 
 func (s *Store) expireError(issuedAt time.Time) {
-	timer := time.NewTimer(errorDisplayTTL)
+	timer := time.NewTimer(s.errorTTL)
 	defer timer.Stop()
 	<-timer.C
 
