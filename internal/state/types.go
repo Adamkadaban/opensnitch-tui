@@ -10,6 +10,7 @@ const (
 	ViewAlerts    ViewKind = "alerts"
 	ViewEvents    ViewKind = "events"
 	ViewRules     ViewKind = "rules"
+	ViewFirewall  ViewKind = "firewall"
 	ViewNodes     ViewKind = "nodes"
 	ViewSettings  ViewKind = "settings"
 )
@@ -20,6 +21,7 @@ var DefaultViewOrder = []ViewKind{
 	ViewEvents,
 	ViewAlerts,
 	ViewRules,
+	ViewFirewall,
 	ViewNodes,
 	ViewSettings,
 }

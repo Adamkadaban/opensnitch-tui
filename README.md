@@ -52,6 +52,7 @@ nodes: []
 ## 🧭 Usage (key hints)
 - **Navigation:** arrow keys only (no vi keys)
 - **Rules view:** `e` enable · `d` disable · `x` delete · `m` modify
+- **Firewall view:** `←`/`→` select node · `↑`/`↓` select chain · `e` enable · `d` disable · `r` reload rules
 - **Prompt dialog:** arrows to move focus/choices; `a` allow · `d` deny · `r` reject
 - **Tables:** arrows to move; PgUp/PgDn/Home/End for paging
 

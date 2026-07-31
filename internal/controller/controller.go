@@ -1,6 +1,10 @@
 package controller
 
-import "github.com/adamkadaban/opensnitch-tui/internal/state"
+import (
+	"context"
+
+	"github.com/adamkadaban/opensnitch-tui/internal/state"
+)
 
 // RuleManager exposes CRUD operations for daemon rules.
 type RuleManager interface {
@@ -8,6 +12,13 @@ type RuleManager interface {
 	DisableRule(nodeID, ruleName string) error
 	DeleteRule(nodeID, ruleName string) error
 	ChangeRule(nodeID string, rule state.Rule) error
+}
+
+// FirewallManager controls the system firewall on one daemon node.
+type FirewallManager interface {
+	EnableFirewall(ctx context.Context, nodeID string) error
+	DisableFirewall(ctx context.Context, nodeID string) error
+	ReloadFirewall(ctx context.Context, nodeID string) error
 }
 
 // PromptManager resolves interactive connection prompts surfaced by the daemon.
