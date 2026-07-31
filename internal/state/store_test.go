@@ -122,6 +122,44 @@ func TestStoreErrorAutoExpires(t *testing.T) {
 		t.Fatalf("expected error to expire, still seeing %q", err)
 	}
 }
+
+func TestStoreSetErrorReplacesExpiryTimer(t *testing.T) {
+	store := NewStore()
+	store.errorTTL = time.Second
+
+	store.SetError("first")
+	firstTimer := store.errorTimer
+	store.SetError("second")
+
+	if firstTimer == store.errorTimer {
+		t.Fatal("expected a replacement error timer")
+	}
+	if firstTimer.Stop() {
+		t.Fatal("expected the first error timer to already be stopped")
+	}
+	if got := store.Snapshot().LastError; got != "second" {
+		t.Fatalf("expected latest error, got %q", got)
+	}
+}
+
+func TestStoreClearErrorStopsExpiryTimer(t *testing.T) {
+	store := NewStore()
+	store.errorTTL = time.Second
+	store.SetError("boom")
+	timer := store.errorTimer
+
+	store.ClearError()
+
+	if store.errorTimer != nil {
+		t.Fatal("expected error timer cleanup")
+	}
+	if timer.Stop() {
+		t.Fatal("expected error timer to already be stopped")
+	}
+	if got := store.Snapshot().LastError; got != "" {
+		t.Fatalf("expected cleared error, got %q", got)
+	}
+}
 func TestStoreSubscriptionReceivesNotifications(t *testing.T) {
 	store := NewStore()
 	sub := store.Subscribe()
