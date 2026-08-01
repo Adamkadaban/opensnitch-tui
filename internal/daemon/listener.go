@@ -3,8 +3,11 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"syscall"
+	"time"
 )
 
 type listenTarget struct {
@@ -37,6 +40,14 @@ func removeStaleUnixSocket(path string) error {
 	}
 	if info.Mode()&os.ModeSocket == 0 {
 		return fmt.Errorf("refusing to remove non-socket path %q", path)
+	}
+	conn, err := net.DialTimeout("unix", path, 250*time.Millisecond)
+	if err == nil {
+		conn.Close()
+		return fmt.Errorf("unix socket %q is already active", path)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) && !errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("probe unix socket %q: %w", path, err)
 	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("remove stale socket: %w", err)
