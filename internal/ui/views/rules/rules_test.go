@@ -3,6 +3,8 @@ package rules
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
+	"github.com/adamkadaban/opensnitch-tui/internal/rulearchive"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
 )
@@ -256,6 +259,60 @@ func TestRulesImportAndExportRunAsynchronously(t *testing.T) {
 	}
 	if out := view.View(); !strings.Contains(out, "Exported 1 rule(s)") || !strings.Contains(out, archive.path) {
 		t.Fatalf("expected export success feedback, got %q", out)
+	}
+}
+
+func TestRulesImportDoesNotApplyUnsafeNestedAllowRule(t *testing.T) {
+	root, err := os.MkdirTemp(".", ".rules-archive-test-")
+	if err != nil {
+		t.Fatalf("MkdirTemp error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("RemoveAll error: %v", err)
+		}
+	})
+	root, err = filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("Abs error: %v", err)
+	}
+	archive, err := rulearchive.New(root, rulearchive.DefaultLimits())
+	if err != nil {
+		t.Fatalf("New archive error: %v", err)
+	}
+	node := state.Node{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady}
+	dir := archive.Directory(node)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+	data := `{
+  "name": "unsafe-allow",
+  "action": "allow",
+  "duration": "always",
+  "operator": {"type": "list", "list": [{"type": "list"}]},
+  "enabled": true,
+  "precedence": false,
+  "nolog": false
+}`
+	if err := os.WriteFile(filepath.Join(dir, "unsafe.json"), []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	store := state.NewStore()
+	store.SetNodes([]state.Node{node})
+	ctrl := &fakeRuleController{}
+	view := New(store, theme.New(theme.Options{}), ctrl, archive)
+	view.SetSize(120, 40)
+	_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd == nil {
+		t.Fatal("expected import command")
+	}
+	view.Update(cmd())
+	if len(ctrl.rules) != 0 || ctrl.action == "apply" {
+		t.Fatalf("unsafe allow rule reached ApplyRules: action=%q rules=%+v", ctrl.action, ctrl.rules)
+	}
+	if out := view.View(); !strings.Contains(out, "OpenSnitch v1.8") {
+		t.Fatalf("expected v1.8 incompatibility feedback, got %q", out)
 	}
 }
 
