@@ -21,6 +21,11 @@ type FirewallManager interface {
 	ReloadFirewall(ctx context.Context, nodeID string) error
 }
 
+// NodeConfigManager applies a validated safe daemon configuration subset.
+type NodeConfigManager interface {
+	ApplyNodeConfig(ctx context.Context, nodeID string, config state.NodeDaemonConfig) error
+}
+
 // PromptManager resolves interactive connection prompts surfaced by the daemon.
 type PromptManager interface {
 	ResolvePrompt(decision PromptDecision) error

@@ -27,13 +27,14 @@ import (
 
 // Options controls how the root model is assembled.
 type Options struct {
-	Theme    theme.Theme
-	KeyMap   *keymap.Global
-	Rules    controller.RuleManager
-	Firewall controller.FirewallManager
-	Tasks    controller.TaskManager
-	Prompts  controller.PromptManager
-	Settings controller.SettingsManager
+	Theme      theme.Theme
+	KeyMap     *keymap.Global
+	Rules      controller.RuleManager
+	Firewall   controller.FirewallManager
+	Tasks      controller.TaskManager
+	NodeConfig controller.NodeConfigManager
+	Prompts    controller.PromptManager
+	Settings   controller.SettingsManager
 }
 
 // Model orchestrates routed Bubble Tea views and global UI chrome.
@@ -67,7 +68,7 @@ func New(store *state.Store, opts Options) *Model {
 		state.ViewRules:     rules.New(store, opts.Theme, opts.Rules),
 		state.ViewFirewall:  firewall.New(store, opts.Theme, opts.Firewall),
 		state.ViewTasks:     tasks.New(store, opts.Theme, opts.Tasks),
-		state.ViewNodes:     nodes.New(store, opts.Theme),
+		state.ViewNodes:     nodes.New(store, opts.Theme, opts.NodeConfig),
 		state.ViewSettings:  settingsview.New(store, opts.Theme, opts.Settings),
 	}
 

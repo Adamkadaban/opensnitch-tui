@@ -51,6 +51,55 @@ type Node struct {
 	Message         string
 }
 
+// NodeDaemonConfig is the safe, editable subset of an OpenSnitch v1.8 daemon configuration.
+type NodeDaemonConfig struct {
+	DefaultAction     string
+	DefaultDuration   string
+	ProcMonitorMethod string
+	LogLevel          int
+	LogUTC            bool
+	LogMicro          bool
+	InterceptUnknown  bool
+	Rules             NodeRulesConfig
+	Internal          NodeInternalConfig
+	FwOptions         NodeFirewallOptions
+	Stats             NodeStatsConfig
+}
+
+type NodeRulesConfig struct {
+	Path            string
+	EnableChecksums bool
+}
+
+type NodeInternalConfig struct {
+	FlushConnsOnStart bool
+	GCPercent         int
+}
+
+type NodeFirewallOptions struct {
+	MonitorInterval string
+	QueueBypass     bool
+}
+
+type NodeStatsConfig struct {
+	MaxEvents int
+	MaxStats  int
+}
+
+// NodeConfigMetadata contains non-secret, read-only configuration metadata.
+type NodeConfigMetadata struct {
+	AuthenticationType string
+	TLSConfigured      bool
+}
+
+// NodeConfigState preserves the full daemon document while exposing only safe fields.
+type NodeConfigState struct {
+	RawJSON    string
+	Config     NodeDaemonConfig
+	Metadata   NodeConfigMetadata
+	ParseError string
+}
+
 // Stats aggregates daemon telemetry snapshots rendered in the dashboard.
 type Stats struct {
 	NodeID         string
@@ -227,6 +276,7 @@ type Snapshot struct {
 	Alerts          []Alert
 	Rules           map[string][]Rule
 	SystemFirewalls map[string]SystemFirewall
+	NodeConfigs     map[string]NodeConfigState
 	Settings        Settings
 	Prompts         []Prompt
 	LastError       string

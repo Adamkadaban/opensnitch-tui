@@ -54,6 +54,7 @@ nodes: []
 - **Rules view:** `e` enable · `d` disable · `x` delete · `m` modify
 - **Firewall view:** `←`/`→` select node · `↑`/`↓` select chain · `e` enable · `d` disable · `r` reload rules
 - **Tasks view:** `←`/`→` select node · `↑`/`↓` select task profile · `s` start · `x` stop
+- **Nodes view:** `↑`/`↓` select node · `Enter` details · `e` enter/exit safe config editing · arrows or `Enter`/`space` change values · `s` save · `esc` cancel/back
 - **Prompt dialog:** arrows to move focus/choices; `a` allow · `d` deny · `r` reject
 - **Tables:** arrows to move; PgUp/PgDn/Home/End for paging
 
