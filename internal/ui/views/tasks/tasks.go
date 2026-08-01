@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,9 +21,10 @@ import (
 )
 
 const (
-	taskInterval   = "5s"
-	stopTimeout    = 5 * time.Second
-	maxPreviewRows = 14
+	taskInterval       = "5s"
+	firstUpdateTimeout = 15 * time.Second
+	stopTimeout        = 5 * time.Second
+	maxPreviewRows     = 14
 )
 
 type taskPhase string
@@ -30,6 +32,7 @@ type taskPhase string
 const (
 	phaseIdle     taskPhase = "idle"
 	phaseStarting taskPhase = "starting"
+	phaseWaiting  taskPhase = "waiting"
 	phaseRunning  taskPhase = "running"
 	phaseStopping taskPhase = "stopping"
 	phaseError    taskPhase = "error"
@@ -87,6 +90,10 @@ type taskRuntime struct {
 	lastUpdate  time.Time
 	preview     string
 	updateError string
+
+	firstUpdateDeadline time.Time
+	firstUpdateExpired  bool
+	receivedFirstUpdate bool
 }
 
 type taskStartMsg struct {
@@ -115,6 +122,12 @@ type taskStopMsg struct {
 	generation uint64
 	streamID   uint64
 	err        error
+}
+
+type taskFirstUpdateTimeoutMsg struct {
+	key        taskKey
+	generation uint64
+	streamID   uint64
 }
 
 // Model renders and controls daemon background task streams.
@@ -169,7 +182,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskDoneMsg:
 		m.onDone(msg)
 	case taskStopMsg:
-		m.onStopped(msg)
+		return m, m.onStopped(msg)
+	case taskFirstUpdateTimeoutMsg:
+		return m, m.onFirstUpdateTimeout(msg)
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "left":
@@ -202,6 +217,8 @@ func (m *Model) View() string {
 	lines := make([]string, 0, 24)
 	if len(nodes) == 0 {
 		lines = append(lines,
+			m.clip("Remote daemon telemetry only; streams do not enable firewall features."),
+			m.clip("Results appear in selected profile details; other tabs are unchanged."),
 			m.theme.Subtle.Render("No daemon nodes are configured."),
 			m.theme.Subtle.Render("←/→ nodes · ↑/↓ task profiles · s start · x stop"),
 		)
@@ -210,6 +227,10 @@ func (m *Model) View() string {
 
 	node := nodes[m.nodeIdx]
 	lines = append(lines, m.renderNode(node, len(nodes)))
+	lines = append(lines,
+		m.clip("Remote daemon telemetry only; streams do not enable firewall features."),
+		m.clip("Results appear in selected profile details; other tabs are unchanged."),
+	)
 	lines = append(lines, m.theme.Header.Padding(0).Render("Task profiles"))
 	for idx, profile := range profiles {
 		lines = append(lines, m.renderProfile(node, profile, idx == m.profileIdx))
@@ -217,11 +238,25 @@ func (m *Model) View() string {
 
 	profile := profiles[m.profileIdx]
 	runtime := m.runtime(taskKey{nodeID: node.ID, name: profile.name})
-	lines = append(lines, "", m.clip(m.theme.Header.Padding(0).Render(profile.title+" details")))
-	lines = append(lines, m.clip(profile.description), m.clip(profile.config))
-	lines = append(lines, m.renderRuntime(runtime))
-	lines = append(lines, m.renderPreview(runtime)...)
-	lines = append(lines, m.renderStatus())
+	lines = append(lines, m.clip(m.theme.Header.Padding(0).Render(profile.title+" details")))
+	detailLines := []string{m.clip(profile.description), m.clip(profile.config)}
+	runtimeLines := m.renderRuntime(runtime)
+	statusLines := m.renderStatus()
+	previewRows := m.contentHeight() -
+		flattenedLineCount(lines) -
+		flattenedLineCount(detailLines) -
+		flattenedLineCount(runtimeLines) -
+		1 -
+		flattenedLineCount(statusLines)
+	for previewRows < 0 && len(detailLines) > 0 {
+		detailLines = detailLines[:len(detailLines)-1]
+		previewRows++
+	}
+	lines = append(lines, detailLines...)
+	lines = append(lines, runtimeLines...)
+	lines = append(lines, m.clip(m.theme.Header.Padding(0).Render("Latest safe summary")))
+	lines = append(lines, m.renderPreview(runtime, max(0, previewRows))...)
+	lines = append(lines, statusLines...)
 
 	return m.wrap(m.boundLines(lines))
 }
@@ -240,7 +275,7 @@ func (m *Model) SetTheme(th theme.Theme) {
 // HandlesMessage keeps task streams active while another top-level view is selected.
 func (m *Model) HandlesMessage(msg tea.Msg) bool {
 	switch msg.(type) {
-	case taskStartMsg, taskUpdateMsg, taskDoneMsg, taskStopMsg:
+	case taskStartMsg, taskUpdateMsg, taskDoneMsg, taskStopMsg, taskFirstUpdateTimeoutMsg:
 		return true
 	default:
 		return false
@@ -284,7 +319,7 @@ func (m *Model) startSelected(nodes []state.Node) tea.Cmd {
 	key := taskKey{nodeID: node.ID, name: profile.name}
 	runtime := m.runtime(key)
 	switch runtime.phase {
-	case phaseStarting, phaseRunning, phaseStopping:
+	case phaseStarting, phaseWaiting, phaseRunning, phaseStopping:
 		m.setError(fmt.Sprintf("%s is already %s for %s.", profile.title, runtime.phase, util.DisplayName(node)))
 		return nil
 	}
@@ -365,10 +400,18 @@ func (m *Model) onStarted(msg taskStartMsg) tea.Cmd {
 	}
 
 	runtime.stream = msg.stream
-	runtime.phase = phaseRunning
+	runtime.phase = phaseWaiting
 	runtime.updateError = ""
-	m.setStatus(fmt.Sprintf("%s is running.", profileTitle(msg.key.name)))
-	return waitTaskCmd(msg.key, msg.generation, msg.stream)
+	runtime.firstUpdateDeadline = time.Now().Add(firstUpdateTimeout)
+	runtime.firstUpdateExpired = false
+	runtime.receivedFirstUpdate = false
+	m.setStatus(fmt.Sprintf(
+		"Waiting for first %s update · %s interval · %s timeout.",
+		profileTitle(msg.key.name),
+		taskInterval,
+		firstUpdateTimeout,
+	))
+	return waitTaskCmd(msg.key, msg.generation, msg.stream, runtime.firstUpdateDeadline)
 }
 
 func (m *Model) onUpdate(msg taskUpdateMsg) tea.Cmd {
@@ -379,16 +422,22 @@ func (m *Model) onUpdate(msg taskUpdateMsg) tea.Cmd {
 	}
 
 	preview, err := safePreview(msg.key.name, msg.update.Data)
-	runtime.lastUpdate = time.Now()
 	if err != nil {
 		runtime.updateError = err.Error()
 		m.setError(fmt.Sprintf("%s update rejected: %v", profileTitle(msg.key.name), err))
 	} else {
+		if runtime.phase != phaseStopping {
+			runtime.phase = phaseRunning
+		}
+		runtime.receivedFirstUpdate = true
+		runtime.firstUpdateDeadline = time.Time{}
+		runtime.firstUpdateExpired = false
+		runtime.lastUpdate = time.Now()
 		runtime.preview = preview
 		runtime.updateError = ""
 		m.setStatus(fmt.Sprintf("%s updated at %s.", profileTitle(msg.key.name), runtime.lastUpdate.Format("15:04:05")))
 	}
-	return waitTaskCmd(msg.key, msg.generation, runtime.stream)
+	return waitTaskCmd(msg.key, msg.generation, runtime.stream, runtime.firstUpdateDeadline)
 }
 
 func (m *Model) onDone(msg taskDoneMsg) {
@@ -415,23 +464,66 @@ func (m *Model) onDone(msg taskDoneMsg) {
 	}
 }
 
-func (m *Model) onStopped(msg taskStopMsg) {
+func (m *Model) onStopped(msg taskStopMsg) tea.Cmd {
 	runtime, ok := m.runtimes[msg.key]
 	if !ok || runtime.generation != msg.generation || runtime.stream == nil ||
 		runtime.stream.ID() != msg.streamID || runtime.phase != phaseStopping {
-		return
+		return nil
 	}
 	if msg.err != nil {
-		runtime.phase = phaseRunning
+		if runtime.receivedFirstUpdate {
+			runtime.phase = phaseRunning
+		} else {
+			runtime.phase = phaseWaiting
+		}
 		runtime.updateError = msg.err.Error()
 		m.setError(fmt.Sprintf("Stop %s failed: %v", msg.key.name, msg.err))
-		return
+		if runtime.firstUpdateExpired || (!runtime.firstUpdateDeadline.IsZero() &&
+			!time.Now().Before(runtime.firstUpdateDeadline)) {
+			return m.timeoutRuntime(msg.key, runtime)
+		}
+		return nil
 	}
 
 	m.cancelRuntime(runtime)
 	runtime.phase = phaseIdle
 	runtime.updateError = ""
 	m.setStatus(fmt.Sprintf("%s stop acknowledged.", profileTitle(msg.key.name)))
+	return nil
+}
+
+func (m *Model) onFirstUpdateTimeout(msg taskFirstUpdateTimeoutMsg) tea.Cmd {
+	runtime, ok := m.runtimes[msg.key]
+	if !ok || runtime.generation != msg.generation || runtime.stream == nil ||
+		runtime.stream.ID() != msg.streamID || runtime.receivedFirstUpdate {
+		return nil
+	}
+	if runtime.phase == phaseStopping {
+		runtime.firstUpdateExpired = true
+		return nil
+	}
+	if runtime.phase != phaseWaiting {
+		return nil
+	}
+	return m.timeoutRuntime(msg.key, runtime)
+}
+
+func (m *Model) timeoutRuntime(key taskKey, runtime *taskRuntime) tea.Cmd {
+	stream := runtime.stream
+	cancel := runtime.cancel
+	runtime.stream = nil
+	runtime.cancel = nil
+	m.nextGeneration++
+	runtime.generation = m.nextGeneration
+	runtime.phase = phaseError
+	runtime.firstUpdateDeadline = time.Time{}
+	runtime.firstUpdateExpired = true
+	runtime.updateError = fmt.Sprintf(
+		"No first update in %s; task may be unsupported/disabled.\nCheck OpenSnitch v1.8 and daemon task configuration/logs.",
+		firstUpdateTimeout,
+	)
+	m.setError(fmt.Sprintf("%s timed out waiting for its first update.", profileTitle(key.name)))
+	return timeoutTaskCmd(m.manager, stream, cancel)
 }
 
 func (m *Model) reconcileNodes(nodes []state.Node) {
@@ -440,7 +532,8 @@ func (m *Model) reconcileNodes(nodes []state.Node) {
 		statuses[node.ID] = node.Status
 	}
 	for key, runtime := range m.runtimes {
-		if runtime.phase != phaseStarting && runtime.phase != phaseRunning && runtime.phase != phaseStopping {
+		if runtime.phase != phaseStarting && runtime.phase != phaseWaiting &&
+			runtime.phase != phaseRunning && runtime.phase != phaseStopping {
 			continue
 		}
 		status, exists := statuses[key.nodeID]
@@ -488,44 +581,61 @@ func (m *Model) renderProfile(node state.Node, profile taskProfile, selected boo
 	return m.clip(label)
 }
 
-func (m *Model) renderRuntime(runtime *taskRuntime) string {
+func (m *Model) renderRuntime(runtime *taskRuntime) []string {
 	updated := "never"
 	if !runtime.lastUpdate.IsZero() {
 		updated = runtime.lastUpdate.Format(time.RFC3339)
 	}
 	line := fmt.Sprintf("State %s · last update %s", strings.ToUpper(string(runtime.phase)), updated)
 	if runtime.updateError != "" {
-		line += " · " + runtime.updateError
-		return m.clip(m.theme.Danger.Render(line))
+		lines := []string{m.clip(m.theme.Danger.Render(line))}
+		for _, errorLine := range strings.Split(runtime.updateError, "\n") {
+			lines = append(lines, m.clip(m.theme.Danger.Render(errorLine)))
+		}
+		return lines
 	}
-	return m.clip(m.phaseStyle(runtime.phase).Render(line))
+	return []string{m.clip(m.phaseStyle(runtime.phase).Render(line))}
 }
 
-func (m *Model) renderPreview(runtime *taskRuntime) []string {
-	lines := []string{m.clip(m.theme.Header.Padding(0).Render("Latest safe summary"))}
+func (m *Model) renderPreview(runtime *taskRuntime, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
 	if runtime.preview == "" {
-		return append(lines, m.clip(m.theme.Subtle.Render("No safe metrics received yet.")))
+		return []string{m.clip(m.theme.Subtle.Render("No safe metrics received yet."))}
 	}
 	previewLines := strings.Split(runtime.preview, "\n")
-	if len(previewLines) > maxPreviewRows {
-		previewLines = append(previewLines[:maxPreviewRows-1], "…")
+	limit = min(limit, maxPreviewRows)
+	if limit == 1 && len(previewLines) > 1 {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, []byte(runtime.preview)); err == nil {
+			return []string{m.clip(compact.String())}
+		}
 	}
+	if len(previewLines) > limit {
+		if limit == 1 {
+			previewLines = previewLines[:1]
+		} else {
+			previewLines = append(previewLines[:limit-1], "…")
+		}
+	}
+	lines := make([]string, 0, len(previewLines))
 	for _, line := range previewLines {
 		lines = append(lines, m.clip(line))
 	}
 	return lines
 }
 
-func (m *Model) renderStatus() string {
+func (m *Model) renderStatus() []string {
 	help := m.clip("←/→ nodes · ↑/↓ task profiles · s start · x stop")
 	if m.statusLine == "" {
-		return m.theme.Subtle.Render(help)
+		return []string{m.theme.Subtle.Render(help)}
 	}
 	style := m.theme.Success
 	if m.statusError {
 		style = m.theme.Danger
 	}
-	return style.Render(m.clip(m.statusLine)) + "\n" + m.theme.Subtle.Render(help)
+	return []string{style.Render(m.clip(m.statusLine)), m.theme.Subtle.Render(help)}
 }
 
 func (m *Model) selection(nodes []state.Node) (state.Node, taskProfile, bool) {
@@ -607,7 +717,7 @@ func (m *Model) phaseStyle(phase taskPhase) lipgloss.Style {
 	switch phase {
 	case phaseRunning:
 		return m.theme.Success
-	case phaseStarting, phaseStopping:
+	case phaseStarting, phaseWaiting, phaseStopping:
 		return m.theme.Warning
 	case phaseError:
 		return m.theme.Danger
@@ -661,8 +771,25 @@ func startTaskCmd(
 	}
 }
 
-func waitTaskCmd(key taskKey, generation uint64, stream controller.TaskStream) tea.Cmd {
+func waitTaskCmd(
+	key taskKey,
+	generation uint64,
+	stream controller.TaskStream,
+	firstUpdateDeadline time.Time,
+) tea.Cmd {
 	return func() tea.Msg {
+		var timer *time.Timer
+		var timeout <-chan time.Time
+		if !firstUpdateDeadline.IsZero() {
+			delay := time.Until(firstUpdateDeadline)
+			if delay < 0 {
+				delay = 0
+			}
+			timer = time.NewTimer(delay)
+			timeout = timer.C
+			defer timer.Stop()
+		}
+
 		select {
 		case update, ok := <-stream.Updates():
 			if ok {
@@ -676,6 +803,30 @@ func waitTaskCmd(key taskKey, generation uint64, stream controller.TaskStream) t
 			return taskDoneMsg{key: key, generation: generation, streamID: stream.ID(), err: stream.Err()}
 		case <-stream.Done():
 			return taskDoneMsg{key: key, generation: generation, streamID: stream.ID(), err: stream.Err()}
+		case <-timeout:
+			select {
+			case update, ok := <-stream.Updates():
+				if ok {
+					return taskUpdateMsg{
+						key:        key,
+						generation: generation,
+						streamID:   stream.ID(),
+						update:     update,
+					}
+				}
+				return taskDoneMsg{
+					key:        key,
+					generation: generation,
+					streamID:   stream.ID(),
+					err:        stream.Err(),
+				}
+			default:
+			}
+			return taskFirstUpdateTimeoutMsg{
+				key:        key,
+				generation: generation,
+				streamID:   stream.ID(),
+			}
 		}
 	}
 }
@@ -706,6 +857,31 @@ func discardTaskCmd(manager controller.TaskManager, stream controller.TaskStream
 		_ = manager.StopTask(ctx, stream)
 		return nil
 	}
+}
+
+func timeoutTaskCmd(
+	manager controller.TaskManager,
+	stream controller.TaskStream,
+	cancel context.CancelFunc,
+) tea.Cmd {
+	return func() tea.Msg {
+		if manager != nil && stream != nil {
+			ctx, stopCancel := context.WithTimeout(context.Background(), stopTimeout)
+			_ = manager.StopTask(ctx, stream)
+			stopCancel()
+		}
+		if cancel != nil {
+			cancel()
+		}
+		return nil
+	}
+}
+
+func flattenedLineCount(lines []string) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	return len(strings.Split(strings.Join(lines, "\n"), "\n"))
 }
 
 func nodeMonitorTarget(node state.Node) string {
