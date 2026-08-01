@@ -1,11 +1,36 @@
 package daemon
 
 import (
+	"fmt"
 	"time"
 
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 )
+
+// RuleApplyError identifies the first unacknowledged rule in a sequential apply.
+type RuleApplyError struct {
+	Index   int
+	Name    string
+	Applied int
+	Total   int
+	Err     error
+}
+
+func (e *RuleApplyError) Error() string {
+	return fmt.Sprintf(
+		"rule %d %q failed after %d of %d rules applied: %v",
+		e.Index,
+		e.Name,
+		e.Applied,
+		e.Total,
+		e.Err,
+	)
+}
+
+func (e *RuleApplyError) Unwrap() error {
+	return e.Err
+}
 
 func convertRules(list []*pb.Rule, nodeID string) []state.Rule {
 	if len(list) == 0 {

@@ -25,6 +25,7 @@ import (
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
+	"github.com/adamkadaban/opensnitch-tui/internal/rulearchive"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
@@ -502,7 +503,7 @@ func (s *Server) ChangeRule(nodeID string, rule state.Rule) error {
 	return nil
 }
 
-// ApplyRules sends one acknowledged CHANGE_RULE batch and updates state only after OK.
+// ApplyRules validates a batch, then applies each rule after its daemon acknowledgement.
 func (s *Server) ApplyRules(ctx context.Context, nodeID string, rules []state.Rule) error {
 	if strings.TrimSpace(nodeID) == "" {
 		return errors.New("node id required")
@@ -511,7 +512,6 @@ func (s *Server) ApplyRules(ctx context.Context, nodeID string, rules []state.Ru
 		return errors.New("at least one rule is required")
 	}
 	seen := make(map[string]struct{}, len(rules))
-	protoRules := make([]*pb.Rule, len(rules))
 	applied := make([]state.Rule, len(rules))
 	for i, rule := range rules {
 		if strings.TrimSpace(rule.Name) == "" {
@@ -523,16 +523,31 @@ func (s *Server) ApplyRules(ctx context.Context, nodeID string, rules []state.Ru
 		seen[rule.Name] = struct{}{}
 		rule.NodeID = nodeID
 		applied[i] = rule
-		protoRules[i] = serializeRule(rule)
 	}
-	notif := &pb.Notification{
-		Type:  pb.Action_CHANGE_RULE,
-		Rules: protoRules,
+	limits := rulearchive.DefaultLimits()
+	for i, rule := range applied {
+		if err := rulearchive.ValidateOperator(rule.Operator, limits); err != nil {
+			return fmt.Errorf("rule %d %q operator: %w", i+1, rule.Name, err)
+		}
 	}
-	if _, err := s.SendNotification(ctx, nodeID, notif); err != nil {
-		return err
+
+	for i, rule := range applied {
+		if err := ctx.Err(); err != nil {
+			return &RuleApplyError{
+				Index: i + 1, Name: rule.Name, Applied: i, Total: len(applied), Err: err,
+			}
+		}
+		notif := &pb.Notification{
+			Type:  pb.Action_CHANGE_RULE,
+			Rules: []*pb.Rule{serializeRule(rule)},
+		}
+		if _, err := s.SendNotification(ctx, nodeID, notif); err != nil {
+			return &RuleApplyError{
+				Index: i + 1, Name: rule.Name, Applied: i, Total: len(applied), Err: err,
+			}
+		}
+		s.store.ApplyRules(nodeID, []state.Rule{rule})
 	}
-	s.store.ApplyRules(nodeID, applied)
 	return nil
 }
 

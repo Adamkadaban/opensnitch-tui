@@ -484,6 +484,12 @@ func validateOperator(op state.RuleOperator, limits Limits, depth int, count *in
 	return validateOperatorTree(op, limits, depth, 0, count)
 }
 
+// ValidateOperator checks whether an operator tree can be safely represented by OpenSnitch v1.8.
+func ValidateOperator(op state.RuleOperator, limits Limits) error {
+	count := 0
+	return validateOperator(op, limits, 1, &count)
+}
+
 func validateOperatorTree(op state.RuleOperator, limits Limits, depth, listDepth int, count *int) error {
 	if depth > limits.MaxOperatorDepth {
 		return fmt.Errorf("tree depth exceeds limit of %d", limits.MaxOperatorDepth)
