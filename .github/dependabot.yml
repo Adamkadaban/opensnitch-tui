@@ -9,6 +9,13 @@ updates:
       go-dependencies:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: golang.org/x/sync
+        versions:
+          - ">= 0.20.0"
+      - dependency-name: google.golang.org/grpc
+        versions:
+          - ">= 1.81.0"
 
   - package-ecosystem: github-actions
     directory: /
