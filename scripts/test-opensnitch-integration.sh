@@ -90,6 +90,8 @@ if systemctl is-active --quiet "$service"; then
 	service_was_active=1
 fi
 
+"$go_bin" mod download
+
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -119,7 +121,7 @@ OPENSNITCH_INTEGRATION=1 \
 	-timeout=2m &
 test_pid=$!
 
-socket_deadline=$((SECONDS + 20))
+socket_deadline=$((SECONDS + 60))
 while [[ ! -S $socket ]]; do
 	if ! kill -0 "$test_pid" 2>/dev/null; then
 		set +e
