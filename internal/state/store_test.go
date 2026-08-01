@@ -114,9 +114,7 @@ func TestStoreSnapshotCopy(t *testing.T) {
 
 func TestStoreErrorAutoExpires(t *testing.T) {
 	store := NewStore()
-	originalTTL := errorDisplayTTL
-	errorDisplayTTL = 10 * time.Millisecond
-	t.Cleanup(func() { errorDisplayTTL = originalTTL })
+	store.errorTTL = 10 * time.Millisecond
 
 	store.SetError("timeout")
 	time.Sleep(25 * time.Millisecond)
