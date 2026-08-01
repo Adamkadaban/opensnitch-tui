@@ -49,8 +49,14 @@ func newNotificationSession(nodeID string) *session {
 		nodeID:  nodeID,
 		send:    make(chan *pb.Notification, notificationQueueSize),
 		done:    make(chan struct{}),
-		pending: make(map[uint64]chan *pb.NotificationReply),
+		pending: make(map[uint64]*pendingNotification),
 	}
+}
+
+type pendingNotification struct {
+	replyCh chan *pb.NotificationReply
+	deliver func(*pb.NotificationReply) bool
+	close   func(error)
 }
 
 // SendNotification sends a notification to one connected node and waits for its reply.
@@ -155,6 +161,10 @@ func (s *Server) closeSessions(cause error) {
 }
 
 func (sess *session) addPending(id uint64, replyCh chan *pb.NotificationReply) error {
+	return sess.addPendingNotification(id, &pendingNotification{replyCh: replyCh})
+}
+
+func (sess *session) addPendingNotification(id uint64, pending *pendingNotification) error {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if sess.closeErr != nil {
@@ -166,13 +176,22 @@ func (sess *session) addPending(id uint64, replyCh chan *pb.NotificationReply) e
 	if len(sess.pending) >= notificationPendingLimit {
 		return fmt.Errorf("%w for %s", ErrNotificationBackpressure, sess.nodeID)
 	}
-	sess.pending[id] = replyCh
+	sess.pending[id] = pending
 	return nil
 }
 
 func (sess *session) removePending(id uint64, replyCh chan *pb.NotificationReply) {
 	sess.mu.Lock()
-	if current, ok := sess.pending[id]; ok && current == replyCh {
+	pending, ok := sess.pending[id]
+	if ok && pending.replyCh == replyCh {
+		delete(sess.pending, id)
+	}
+	sess.mu.Unlock()
+}
+
+func (sess *session) removePendingNotification(id uint64, pending *pendingNotification) {
+	sess.mu.Lock()
+	if current, ok := sess.pending[id]; ok && current == pending {
 		delete(sess.pending, id)
 	}
 	sess.mu.Unlock()
@@ -180,15 +199,21 @@ func (sess *session) removePending(id uint64, replyCh chan *pb.NotificationReply
 
 func (sess *session) complete(reply *pb.NotificationReply) bool {
 	sess.mu.Lock()
-	replyCh, ok := sess.pending[reply.GetId()]
-	if ok {
+	pending, ok := sess.pending[reply.GetId()]
+	if ok && pending.replyCh != nil {
 		delete(sess.pending, reply.GetId())
 	}
 	sess.mu.Unlock()
 	if !ok {
 		return false
 	}
-	replyCh <- reply
+	if pending.replyCh != nil {
+		pending.replyCh <- reply
+		return true
+	}
+	if pending.deliver != nil && !pending.deliver(reply) {
+		sess.removePendingNotification(reply.GetId(), pending)
+	}
 	return true
 }
 
@@ -215,9 +240,18 @@ func (sess *session) close(cause error) {
 		}
 		sess.mu.Lock()
 		sess.closeErr = cause
+		pending := make([]*pendingNotification, 0, len(sess.pending))
+		for _, request := range sess.pending {
+			pending = append(pending, request)
+		}
 		clear(sess.pending)
 		sess.mu.Unlock()
 		close(sess.done)
+		for _, request := range pending {
+			if request.close != nil {
+				request.close(cause)
+			}
+		}
 	})
 }
 

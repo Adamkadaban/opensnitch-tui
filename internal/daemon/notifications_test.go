@@ -57,6 +57,38 @@ func TestSendNotificationReturnsMatchingReply(t *testing.T) {
 	}
 }
 
+func TestOneShotNotificationUnregistersAfterReply(t *testing.T) {
+	srv, stream, stop := startNotificationTestStream(t, "node-1")
+	defer stop()
+
+	result := make(chan notificationResult, 1)
+	go func() {
+		reply, err := srv.SendNotification(
+			context.Background(),
+			stream.nodeID,
+			&pb.Notification{Type: pb.Action_CHANGE_CONFIG},
+		)
+		result <- notificationResult{reply: reply, err: err}
+	}()
+
+	sent := <-stream.sent
+	stream.replies <- &pb.NotificationReply{Id: sent.GetId(), Data: "first"}
+	got := <-result
+	if got.err != nil || got.reply.GetData() != "first" {
+		t.Fatalf("expected first reply, got reply=%v err=%v", got.reply, got.err)
+	}
+
+	srv.sessionsMu.RLock()
+	sess := srv.sessions[stream.nodeID]
+	srv.sessionsMu.RUnlock()
+	sess.mu.Lock()
+	pending := len(sess.pending)
+	sess.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("expected one-shot pending cleanup, got %d entries", pending)
+	}
+}
+
 func TestSendNotificationReturnsReplyError(t *testing.T) {
 	srv, stream, stop := startNotificationTestStream(t, "node-1")
 	defer stop()
