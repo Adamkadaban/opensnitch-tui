@@ -305,7 +305,7 @@ func startNotificationTestStream(
 		recvStarted: make(chan struct{}),
 		done:        make(chan error, 1),
 		finished:    make(chan struct{}),
-		nodeID:      peerKey(ctx),
+		nodeID:      transportIdentity(ctx),
 	}
 	go func() {
 		stream.done <- srv.Notifications(stream)

@@ -726,6 +726,49 @@ func TestStoreStatsBeforeSubscribe(t *testing.T) {
 	}
 }
 
+func TestStoreMigrateNodeIdentityMergesProvisionalState(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{
+		{ID: "stable", Name: "old", Status: NodeStatusReady},
+		{ID: "transport", Name: "transport", Status: NodeStatusReady},
+	})
+	store.SetStats(Stats{NodeID: "stable", Connections: 2})
+	store.SetStats(Stats{NodeID: "transport", Connections: 7})
+	store.SetRules("stable", []Rule{{NodeID: "stable", Name: "existing"}})
+	store.SetRules("transport", []Rule{{NodeID: "transport", Name: "provisional"}})
+	store.SetSystemFirewall("transport", SystemFirewall{Enabled: true})
+	store.SetNodeConfig("transport", NodeConfigState{RawJSON: `{"source":"transport"}`})
+	store.AddPrompt(Prompt{ID: "prompt", NodeID: "transport", NodeName: "transport"})
+	store.AddAlert(Alert{ID: "alert", NodeID: "transport", Rule: &Rule{NodeID: "transport"}})
+
+	store.MigrateNodeIdentity("transport", "stable", "daemon")
+	snapshot := store.Snapshot()
+	if len(snapshot.Nodes) != 1 || snapshot.Nodes[0].ID != "stable" || snapshot.Nodes[0].Name != "daemon" {
+		t.Fatalf("nodes were not merged: %+v", snapshot.Nodes)
+	}
+	if _, exists := snapshot.StatsByNode["transport"]; exists {
+		t.Fatal("provisional stats key remains")
+	}
+	if snapshot.StatsByNode["stable"].Connections != 7 {
+		t.Fatalf("newer provisional stats were not retained: %+v", snapshot.StatsByNode["stable"])
+	}
+	if len(snapshot.Rules["stable"]) != 2 {
+		t.Fatalf("rules were not merged: %+v", snapshot.Rules["stable"])
+	}
+	if snapshot.Prompts[0].NodeID != "stable" || snapshot.Alerts[0].NodeID != "stable" {
+		t.Fatalf("prompt or alert was not migrated: prompts=%+v alerts=%+v", snapshot.Prompts, snapshot.Alerts)
+	}
+	if snapshot.Alerts[0].Rule.NodeID != "stable" {
+		t.Fatalf("nested alert rule was not migrated: %+v", snapshot.Alerts[0].Rule)
+	}
+	if _, exists := snapshot.SystemFirewalls["transport"]; exists {
+		t.Fatal("provisional firewall key remains")
+	}
+	if _, exists := snapshot.NodeConfigs["transport"]; exists {
+		t.Fatal("provisional config key remains")
+	}
+}
+
 func TestStoreStatsByNodeDeepCopyIsolation(t *testing.T) {
 	store := NewStore()
 	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})

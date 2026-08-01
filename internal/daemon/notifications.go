@@ -45,19 +45,42 @@ type notificationReceive struct {
 	err   error
 }
 
-func newNotificationSession(nodeID string) *session {
-	return &session{
-		nodeID:  nodeID,
-		send:    make(chan *pb.Notification, notificationQueueSize),
-		done:    make(chan struct{}),
-		pending: make(map[uint64]*pendingNotification),
+func newNotificationSession(nodeID string, transportIDs ...string) *session {
+	transportID := nodeID
+	if len(transportIDs) > 0 {
+		transportID = transportIDs[0]
 	}
+	return &session{
+		transportID: transportID,
+		nodeID:      nodeID,
+		send:        make(chan *pb.Notification, notificationQueueSize),
+		done:        make(chan struct{}),
+		pending:     make(map[uint64]*pendingNotification),
+	}
+}
+
+func (s *Server) registerSession(nodeID string) (*session, error) {
+	if nodeID == "" || nodeID == "unknown" {
+		return nil, ErrUnknownNotificationNode
+	}
+	sess := newNotificationSession(nodeID)
+	s.sessionsMu.Lock()
+	defer s.sessionsMu.Unlock()
+	if s.sessionsClosed {
+		return nil, ErrNotificationSessionClosed
+	}
+	if _, ok := s.sessions[nodeID]; ok {
+		return nil, fmt.Errorf("%w: %s", ErrDuplicateNotificationSession, nodeID)
+	}
+	s.sessions[nodeID] = sess
+	return sess, nil
 }
 
 type pendingNotification struct {
 	replyCh chan *pb.NotificationReply
 	deliver func(*pb.NotificationReply) bool
 	close   func(error)
+	migrate func(string)
 }
 
 // SendNotification sends a notification to one connected node and waits for its reply.
@@ -120,28 +143,13 @@ func (s *Server) nextNotificationID() uint64 {
 	}
 }
 
-func (s *Server) registerSession(nodeID string) (*session, error) {
-	if nodeID == "" || nodeID == "unknown" {
-		return nil, ErrUnknownNotificationNode
-	}
-
-	sess := newNotificationSession(nodeID)
+func (s *Server) unregisterSession(sess *session, cause error) {
 	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
-	if s.sessionsClosed {
-		return nil, ErrNotificationSessionClosed
-	}
-	if _, ok := s.sessions[nodeID]; ok {
-		return nil, fmt.Errorf("%w: %s", ErrDuplicateNotificationSession, nodeID)
-	}
-	s.sessions[nodeID] = sess
-	return sess, nil
-}
-
-func (s *Server) unregisterSession(nodeID string, sess *session, cause error) {
-	s.sessionsMu.Lock()
-	if current, ok := s.sessions[nodeID]; ok && current == sess {
-		delete(s.sessions, nodeID)
+	for nodeID, current := range s.sessions {
+		if current == sess {
+			delete(s.sessions, nodeID)
+			break
+		}
 	}
 	s.sessionsMu.Unlock()
 	sess.close(cause)
@@ -163,6 +171,27 @@ func (s *Server) closeSessions(cause error) {
 
 func (sess *session) addPending(id uint64, replyCh chan *pb.NotificationReply) error {
 	return sess.addPendingNotification(id, &pendingNotification{replyCh: replyCh})
+}
+
+func (sess *session) migrateNodeID(nodeID string) {
+	sess.mu.Lock()
+	sess.nodeID = nodeID
+	callbacks := make([]func(string), 0, len(sess.pending))
+	for _, pending := range sess.pending {
+		if pending.migrate != nil {
+			callbacks = append(callbacks, pending.migrate)
+		}
+	}
+	sess.mu.Unlock()
+	for _, migrate := range callbacks {
+		migrate(nodeID)
+	}
+}
+
+func (sess *session) currentNodeID() string {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.nodeID
 }
 
 func (sess *session) addPendingNotification(id uint64, pending *pendingNotification) error {
@@ -230,7 +259,7 @@ func (sess *session) enqueue(notification *pb.Notification) error {
 	case sess.send <- notification:
 		return nil
 	default:
-		return fmt.Errorf("%w for %s", ErrNotificationQueueFull, sess.nodeID)
+		return fmt.Errorf("%w for %s", ErrNotificationQueueFull, sess.currentNodeID())
 	}
 }
 

@@ -53,19 +53,24 @@ type Server struct {
 	opts  Options
 	grpc  *grpc.Server
 
-	sessions       map[string]*session
-	sessionsMu     sync.RWMutex
-	sessionsClosed bool
-	notifySeqID    uint64
-	prompts        map[string]*promptRequest
-	promptsMu      sync.Mutex
+	sessions             map[string]*session
+	sessionsMu           sync.RWMutex
+	sessionsClosed       bool
+	notifySeqID          uint64
+	identityMu           sync.RWMutex
+	transportAliases     map[string]string
+	nodeTransports       map[string]string
+	supersededTransports map[string]string
+	prompts              map[string]*promptRequest
+	promptsMu            sync.Mutex
 }
 
 type session struct {
-	nodeID    string
-	send      chan *pb.Notification
-	done      chan struct{}
-	closeOnce sync.Once
+	transportID string
+	nodeID      string
+	send        chan *pb.Notification
+	done        chan struct{}
+	closeOnce   sync.Once
 
 	mu       sync.Mutex
 	closeErr error
@@ -90,6 +95,12 @@ func (r *promptRequest) stopTimer() {
 	if r.timer != nil {
 		r.timer.Stop()
 	}
+}
+
+func (r *promptRequest) snapshot() state.Prompt {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.prompt
 }
 
 type promptResponse struct {
@@ -131,11 +142,14 @@ func New(store *state.Store, opts Options) *Server {
 		opts.ServerVersion = "dev"
 	}
 	return &Server{
-		store:       store,
-		opts:        opts,
-		sessions:    make(map[string]*session),
-		notifySeqID: notificationIDFloor,
-		prompts:     make(map[string]*promptRequest),
+		store:                store,
+		opts:                 opts,
+		sessions:             make(map[string]*session),
+		notifySeqID:          notificationIDFloor,
+		transportAliases:     make(map[string]string),
+		nodeTransports:       make(map[string]string),
+		supersededTransports: make(map[string]string),
+		prompts:              make(map[string]*promptRequest),
 	}
 }
 
@@ -177,7 +191,18 @@ func (s *Server) Start(ctx context.Context) error {
 
 // Subscribe registers a daemon session and returns the UI configuration.
 func (s *Server) Subscribe(ctx context.Context, cfg *pb.ClientConfig) (*pb.ClientConfig, error) {
-	node := s.nodeFromContext(ctx, cfg)
+	nodeID, err := s.registerNodeAlias(ctx, cfg.GetName())
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrTransportIdentityConflict):
+			return nil, status.Error(codes.AlreadyExists, err.Error())
+		case errors.Is(err, ErrSupersededNodeTransport):
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		default:
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+	node := s.nodeFromContext(ctx, cfg, nodeID)
 	node.Message = "subscribed"
 	node.Status = state.NodeStatusReady
 	node.LastSeen = time.Now()
@@ -204,21 +229,28 @@ func (s *Server) Subscribe(ctx context.Context, cfg *pb.ClientConfig) (*pb.Clien
 
 // Ping stores the latest daemon statistics for display.
 func (s *Server) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingReply, error) {
-	nodeID := peerKey(ctx)
+	transportID := transportIdentity(ctx)
+	s.identityMu.RLock()
+	nodeID, err := s.resolveTransportLocked(transportID)
+	if err != nil {
+		s.identityMu.RUnlock()
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	now := time.Now()
 	s.store.UpdateNodeStatus(nodeID, state.NodeStatusReady, "last ping", now)
 
 	nodeName := s.nodeName(nodeID)
 	stats := convertStats(req.GetStats(), nodeID, nodeName)
 	s.store.SetStats(stats)
+	s.identityMu.RUnlock()
 
 	return &pb.PingReply{Id: req.GetId()}, nil
 }
 
 // Notifications exchanges daemon replies and server-initiated notifications.
 func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
-	nodeID := peerKey(stream.Context())
-	sess, err := s.registerSession(nodeID)
+	transportID := transportIdentity(stream.Context())
+	sess, err := s.registerTransportSession(transportID)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrUnknownNotificationNode):
@@ -227,6 +259,8 @@ func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
 			return status.Error(codes.AlreadyExists, err.Error())
 		case errors.Is(err, ErrNotificationSessionClosed):
 			return status.Error(codes.Unavailable, err.Error())
+		case errors.Is(err, ErrSupersededNodeTransport):
+			return status.Error(codes.FailedPrecondition, err.Error())
 		default:
 			return status.Error(codes.Internal, err.Error())
 		}
@@ -234,7 +268,7 @@ func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
 
 	closeCause := error(ErrNotificationSessionClosed)
 	defer func() {
-		s.unregisterSession(nodeID, sess, closeCause)
+		s.unregisterSession(sess, closeCause)
 	}()
 
 	replies := make(chan notificationReceive, 1)
@@ -244,7 +278,7 @@ func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
 		select {
 		case <-stream.Context().Done():
 			closeCause = stream.Context().Err()
-			s.store.UpdateNodeStatus(nodeID, state.NodeStatusDisconnected, closeCause.Error(), time.Now())
+			s.updateSessionNodeStatus(sess, state.NodeStatusDisconnected, closeCause.Error())
 			return closeCause
 		case <-sess.done:
 			closeCause = sess.closedError()
@@ -252,18 +286,18 @@ func (s *Server) Notifications(stream pb.UI_NotificationsServer) error {
 		case notif := <-sess.send:
 			if err := stream.Send(notif); err != nil {
 				closeCause = err
-				s.store.UpdateNodeStatus(nodeID, state.NodeStatusError, err.Error(), time.Now())
+				s.updateSessionNodeStatus(sess, state.NodeStatusError, err.Error())
 				return err
 			}
 		case received := <-replies:
 			if received.err == io.EOF {
 				closeCause = ErrNotificationSessionClosed
-				s.store.UpdateNodeStatus(nodeID, state.NodeStatusDisconnected, "notifications closed", time.Now())
+				s.updateSessionNodeStatus(sess, state.NodeStatusDisconnected, "notifications closed")
 				return nil
 			}
 			if received.err != nil {
 				closeCause = received.err
-				s.store.UpdateNodeStatus(nodeID, state.NodeStatusError, received.err.Error(), time.Now())
+				s.updateSessionNodeStatus(sess, state.NodeStatusError, received.err.Error())
 				return received.err
 			}
 			if received.reply != nil {
@@ -278,14 +312,27 @@ func (s *Server) PostAlert(ctx context.Context, alert *pb.Alert) (*pb.MsgRespons
 	if alert == nil {
 		return &pb.MsgResponse{}, nil
 	}
-	nodeID := peerKey(ctx)
+	transportID := transportIdentity(ctx)
+	s.identityMu.RLock()
+	nodeID, err := s.resolveTransportLocked(transportID)
+	if err != nil {
+		s.identityMu.RUnlock()
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	converted := convertAlert(alert, nodeID)
 	s.store.AddAlert(converted)
+	s.identityMu.RUnlock()
 	return &pb.MsgResponse{Id: alert.GetId()}, nil
 }
 
 func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, error) {
-	nodeID := peerKey(ctx)
+	transportID := transportIdentity(ctx)
+	s.identityMu.RLock()
+	nodeID, err := s.resolveTransportLocked(transportID)
+	if err != nil {
+		s.identityMu.RUnlock()
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	nodeName := s.nodeName(nodeID)
 	now := time.Now()
 	timeout := s.promptTimeout()
@@ -305,10 +352,10 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 	req.timer = time.NewTimer(timeout)
 	req.timerC = req.timer.C
 	s.registerPrompt(req)
+	s.store.AddPrompt(prompt)
+	s.identityMu.RUnlock()
 	defer s.unregisterPrompt(req.id)
 	defer req.stopTimer()
-
-	s.store.AddPrompt(prompt)
 
 	for {
 		req.mu.Lock()
@@ -321,12 +368,13 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 			return resp.rule, resp.err
 		case <-timerC:
 			s.store.RemovePrompt(req.id)
-			s.store.SetError(fmt.Sprintf("prompt timed out for %s", displayConnectionLabel(prompt.Connection)))
-			decision := s.defaultPromptDecision(prompt)
-			rule, err := s.buildRuleFromDecision(prompt, decision)
+			currentPrompt := req.snapshot()
+			s.store.SetError(fmt.Sprintf("prompt timed out for %s", displayConnectionLabel(currentPrompt.Connection)))
+			decision := s.defaultPromptDecision(currentPrompt)
+			rule, err := s.buildRuleFromDecision(currentPrompt, decision)
 			if err == nil {
-				stateRule := convertRule(rule, prompt.NodeID)
-				s.store.AddRule(prompt.NodeID, stateRule)
+				stateRule := convertRule(rule, currentPrompt.NodeID)
+				s.store.AddRule(currentPrompt.NodeID, stateRule)
 			}
 			return rule, err
 		case <-req.pauseCh:
@@ -388,12 +436,8 @@ func (s *Server) loadTLSCreds() (credentials.TransportCredentials, error) {
 	return credentials.NewTLS(tlsConfig), nil
 }
 
-func (s *Server) nodeFromContext(ctx context.Context, cfg *pb.ClientConfig) state.Node {
-	nodeID := peerKey(ctx)
-	name := cfg.GetName()
-	if name == "" {
-		name = nodeID
-	}
+func (s *Server) nodeFromContext(ctx context.Context, cfg *pb.ClientConfig, nodeID string) state.Node {
+	name := normalizedDaemonName(cfg.GetName())
 	return state.Node{
 		ID:              nodeID,
 		Name:            name,
@@ -549,12 +593,13 @@ func (s *Server) ResolvePrompt(decision controller.PromptDecision) error {
 	if req == nil {
 		return fmt.Errorf("prompt %s not found", decision.PromptID)
 	}
-	rule, err := s.buildRuleFromDecision(req.prompt, decision)
+	prompt := req.snapshot()
+	rule, err := s.buildRuleFromDecision(prompt, decision)
 	if err != nil {
 		return err
 	}
-	stateRule := convertRule(rule, req.prompt.NodeID)
-	s.store.AddRule(req.prompt.NodeID, stateRule)
+	stateRule := convertRule(rule, prompt.NodeID)
+	s.store.AddRule(prompt.NodeID, stateRule)
 	select {
 	case req.response <- promptResponse{rule: rule}:
 		s.store.RemovePrompt(decision.PromptID)
@@ -1103,13 +1148,6 @@ func bestAvailableTarget(conn state.Connection) controller.PromptTarget {
 	}
 }
 
-func peerKey(ctx context.Context) string {
-	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
-		return stablePeerIdentity(p.Addr)
-	}
-	return "unknown"
-}
-
 func peerAddress(ctx context.Context) string {
 	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
 		switch p.Addr.Network() {
@@ -1124,19 +1162,6 @@ func peerAddress(ctx context.Context) string {
 		return p.Addr.String()
 	}
 	return "unknown"
-}
-
-func stablePeerIdentity(addr net.Addr) string {
-	switch addr.Network() {
-	case "tcp", "tcp4", "tcp6":
-		host, _, err := net.SplitHostPort(addr.String())
-		if err == nil {
-			return "tcp://" + host
-		}
-	case "unix", "unixpacket":
-		return "unix://local"
-	}
-	return fmt.Sprintf("%s://%s", addr.Network(), addr.String())
 }
 
 func (s *Server) promptTimeout() time.Duration {

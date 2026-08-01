@@ -123,6 +123,99 @@ func (s *Store) UpsertNode(node Node) {
 	s.notifyLocked()
 }
 
+// MigrateNodeIdentity merges provisional transport-scoped state into a stable node.
+func (s *Store) MigrateNodeIdentity(fromID, toID, nodeName string) {
+	if fromID == "" || toID == "" || fromID == toID {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fromIdx := s.indexOfLocked(fromID)
+	toIdx := s.indexOfLocked(toID)
+	if fromIdx != -1 {
+		migrated := s.snapshot.Nodes[fromIdx]
+		migrated.ID = toID
+		if nodeName != "" {
+			migrated.Name = nodeName
+		}
+		if toIdx == -1 {
+			s.snapshot.Nodes[fromIdx] = migrated
+		} else {
+			s.snapshot.Nodes[toIdx] = mergeNodes(s.snapshot.Nodes[toIdx], migrated)
+			s.snapshot.Nodes = append(s.snapshot.Nodes[:fromIdx], s.snapshot.Nodes[fromIdx+1:]...)
+		}
+	}
+
+	if stats, ok := s.snapshot.StatsByNode[fromID]; ok {
+		stats.NodeID = toID
+		if nodeName != "" {
+			stats.NodeName = nodeName
+		}
+		migrateEvents(stats.Events, fromID, toID)
+		if current, exists := s.snapshot.StatsByNode[toID]; exists {
+			stats.Events = mergeEvents(stats.Events, current.Events, maxEvents)
+			if current.UpdatedAt.After(stats.UpdatedAt) {
+				current.Events = stats.Events
+				stats = current
+			}
+		}
+		s.snapshot.StatsByNode[toID] = stats
+		delete(s.snapshot.StatsByNode, fromID)
+	}
+	migrateEvents(s.snapshot.Stats.Events, fromID, toID)
+
+	if rules, ok := s.snapshot.Rules[fromID]; ok {
+		for i := range rules {
+			rules[i].NodeID = toID
+		}
+		current := s.snapshot.Rules[toID]
+		indexes := make(map[string]int, len(current))
+		for i := range current {
+			current[i].NodeID = toID
+			indexes[current[i].Name] = i
+		}
+		for _, rule := range rules {
+			if index, exists := indexes[rule.Name]; exists {
+				current[index] = rule
+				continue
+			}
+			indexes[rule.Name] = len(current)
+			current = append(current, rule)
+		}
+		s.snapshot.Rules[toID] = current
+		delete(s.snapshot.Rules, fromID)
+		s.syncRuleCountLocked(toID)
+	}
+	if firewall, ok := s.snapshot.SystemFirewalls[fromID]; ok {
+		firewall.NodeID = toID
+		s.snapshot.SystemFirewalls[toID] = firewall
+		delete(s.snapshot.SystemFirewalls, fromID)
+	}
+	if config, ok := s.snapshot.NodeConfigs[fromID]; ok {
+		s.snapshot.NodeConfigs[toID] = config
+		delete(s.snapshot.NodeConfigs, fromID)
+	}
+	for i := range s.snapshot.Prompts {
+		if s.snapshot.Prompts[i].NodeID == fromID {
+			s.snapshot.Prompts[i].NodeID = toID
+			s.snapshot.Prompts[i].NodeName = nodeName
+		}
+	}
+	for i := range s.snapshot.Alerts {
+		if s.snapshot.Alerts[i].NodeID == fromID {
+			s.snapshot.Alerts[i].NodeID = toID
+			if s.snapshot.Alerts[i].Rule != nil {
+				s.snapshot.Alerts[i].Rule.NodeID = toID
+			}
+		}
+	}
+
+	s.refreshStatsNodeNameLocked(toID, nodeName)
+	s.aggregateReadyStatsLocked()
+	s.notifyLocked()
+}
+
 // UpdateNode applies a mutation to an existing node.
 func (s *Store) UpdateNode(id string, fn func(*Node)) bool {
 	s.mu.Lock()
@@ -243,6 +336,17 @@ func mergeEvents(old, incoming []Event, limit int) []Event {
 
 func eventKey(ev Event) string {
 	return fmt.Sprintf("%s|%d|%s|%s|%s|%s|%d", ev.NodeID, ev.UnixNano, ev.Time, ev.Rule.Name, ev.Connection.DstHost, ev.Connection.DstIP, ev.Connection.DstPort)
+}
+
+func migrateEvents(events []Event, fromID, toID string) {
+	for i := range events {
+		if events[i].NodeID == fromID {
+			events[i].NodeID = toID
+		}
+		if events[i].Rule.NodeID == fromID {
+			events[i].Rule.NodeID = toID
+		}
+	}
 }
 
 func (s *Store) aggregateReadyStatsLocked() {
