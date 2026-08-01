@@ -105,7 +105,7 @@ func TestSubscribeRetainsMalformedNodeConfig(t *testing.T) {
 	if _, err := srv.Subscribe(ctx, &pb.ClientConfig{Config: raw, LogLevel: 3}); err != nil {
 		t.Fatalf("malformed config failed subscription: %v", err)
 	}
-	config, ok := store.NodeConfig("tcp://1.2.3.4:5002")
+	config, ok := store.NodeConfig("tcp://1.2.3.4")
 	if !ok || config.RawJSON != raw || config.ParseError == "" {
 		t.Fatalf("expected retained raw config and parse error, got %+v", config)
 	}

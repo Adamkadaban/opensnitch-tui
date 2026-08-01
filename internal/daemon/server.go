@@ -946,16 +946,38 @@ func bestAvailableTarget(conn state.Connection) controller.PromptTarget {
 
 func peerKey(ctx context.Context) string {
 	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
-		return fmt.Sprintf("%s://%s", p.Addr.Network(), p.Addr.String())
+		return stablePeerIdentity(p.Addr)
 	}
 	return "unknown"
 }
 
 func peerAddress(ctx context.Context) string {
 	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		switch p.Addr.Network() {
+		case "tcp", "tcp4", "tcp6":
+			host, _, err := net.SplitHostPort(p.Addr.String())
+			if err == nil {
+				return host
+			}
+		case "unix", "unixpacket":
+			return "/local"
+		}
 		return p.Addr.String()
 	}
 	return "unknown"
+}
+
+func stablePeerIdentity(addr net.Addr) string {
+	switch addr.Network() {
+	case "tcp", "tcp4", "tcp6":
+		host, _, err := net.SplitHostPort(addr.String())
+		if err == nil {
+			return "tcp://" + host
+		}
+	case "unix", "unixpacket":
+		return "unix://local"
+	}
+	return fmt.Sprintf("%s://%s", addr.Network(), addr.String())
 }
 
 func (s *Server) promptTimeout() time.Duration {
