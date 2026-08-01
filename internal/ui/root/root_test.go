@@ -3,6 +3,7 @@ package root
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,6 +18,34 @@ import (
 
 type rootTaskManager struct {
 	stream controller.TaskStream
+}
+
+type rootFirewallManager struct {
+	err     error
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *rootFirewallManager) EnableFirewall(context.Context, string) error {
+	return m.run()
+}
+
+func (m *rootFirewallManager) DisableFirewall(context.Context, string) error {
+	return m.run()
+}
+
+func (m *rootFirewallManager) ReloadFirewall(context.Context, string) error {
+	return m.run()
+}
+
+func (m *rootFirewallManager) run() error {
+	if m.started != nil {
+		close(m.started)
+	}
+	if m.release != nil {
+		<-m.release
+	}
+	return m.err
 }
 
 func (f *rootTaskManager) StartTask(
@@ -143,6 +172,73 @@ func TestTaskMessagesReachInactiveTasksView(t *testing.T) {
 	store.SetActiveView(state.ViewTasks)
 	if output := model.View(); !strings.Contains(output, `"uptime_seconds": 9`) {
 		t.Fatalf("inactive task update was lost: %q", output)
+	}
+}
+
+func TestFirewallResultsReachInactiveFirewallView(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     rune
+		running bool
+		err     error
+		want    string
+	}{
+		{name: "enable success", key: 'e', running: false, want: "acknowledged for alpha"},
+		{name: "enable error", key: 'e', running: false, err: errors.New("enable failed"), want: "enable failed"},
+		{name: "disable success", key: 'd', running: true, want: "acknowledged for alpha"},
+		{name: "disable error", key: 'd', running: true, err: errors.New("disable failed"), want: "disable failed"},
+		{name: "reload success", key: 'r', running: true, want: "acknowledged for alpha"},
+		{name: "reload error", key: 'r', running: true, err: errors.New("reload failed"), want: "reload failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := state.NewStore()
+			store.SetNodes([]state.Node{{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady}})
+			store.SetSystemFirewall("node-1", state.SystemFirewall{
+				Enabled: tt.running,
+				Running: tt.running,
+			})
+			manager := &rootFirewallManager{
+				err:     tt.err,
+				started: make(chan struct{}),
+				release: make(chan struct{}),
+			}
+			model := New(store, Options{
+				Theme:    theme.New(theme.Options{}),
+				Firewall: manager,
+			})
+			model.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+			model.active = state.ViewFirewall
+			store.SetActiveView(state.ViewFirewall)
+
+			_, actionBatch := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tt.key}})
+			if actionBatch == nil {
+				t.Fatal("expected firewall action command")
+			}
+			resultCh := make(chan tea.Msg, 1)
+			go func() {
+				resultCh <- actionBatch()
+			}()
+			<-manager.started
+			model.cycle(1)
+			if model.active == state.ViewFirewall {
+				t.Fatal("expected firewall view to become inactive")
+			}
+
+			close(manager.release)
+			result := <-resultCh
+			model.Update(result)
+			model.active = state.ViewFirewall
+			store.SetActiveView(state.ViewFirewall)
+			output := model.View()
+			if strings.Contains(output, "in progress") {
+				t.Fatalf("inactive result did not clear progress: %q", output)
+			}
+			if !strings.Contains(output, tt.want) {
+				t.Fatalf("inactive result feedback missing %q: %q", tt.want, output)
+			}
+		})
 	}
 }
 

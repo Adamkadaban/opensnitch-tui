@@ -28,9 +28,11 @@ const (
 )
 
 type firewallResultMsg struct {
-	action action
-	nodeID string
-	err    error
+	action     action
+	nodeID     string
+	nodeName   string
+	generation uint64
+	err        error
 }
 
 type selectedNode struct {
@@ -47,14 +49,18 @@ type Model struct {
 	width  int
 	height int
 
-	nodeIdx  int
-	chainIdx int
-	offset   int
+	nodeIdx    int
+	selectedID string
+	chainIdx   int
+	offset     int
 
-	inProgress     action
-	inProgressNode string
-	statusLine     string
-	statusError    bool
+	nextGeneration       uint64
+	inProgress           action
+	inProgressNode       string
+	inProgressNodeName   string
+	inProgressGeneration uint64
+	statusLine           string
+	statusError          bool
 }
 
 // New constructs the firewall view.
@@ -71,15 +77,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case firewallResultMsg:
-		if msg.nodeID != m.inProgressNode || msg.action != m.inProgress {
+		if msg.nodeID != m.inProgressNode ||
+			msg.action != m.inProgress ||
+			msg.generation != m.inProgressGeneration {
 			return m, nil
 		}
 		m.inProgress = ""
 		m.inProgressNode = ""
+		m.inProgressNodeName = ""
+		m.inProgressGeneration = 0
 		if msg.err != nil {
-			m.setError(fmt.Sprintf("%s firewall failed: %v", msg.action, msg.err))
+			m.setError(fmt.Sprintf("%s firewall failed for %s: %v", msg.action, msg.nodeName, msg.err))
 		} else {
-			m.setStatus(fmt.Sprintf("Firewall %s acknowledged for %s.", msg.action, displayNodeID(snapshot, msg.nodeID)))
+			m.setStatus(fmt.Sprintf("Firewall %s acknowledged for %s.", msg.action, msg.nodeName))
 		}
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -139,6 +149,12 @@ func (m *Model) SetTheme(th theme.Theme) {
 	m.theme = th
 }
 
+// HandlesMessage accepts completed firewall controls while this view is inactive.
+func (m *Model) HandlesMessage(msg tea.Msg) bool {
+	_, ok := msg.(firewallResultMsg)
+	return ok
+}
+
 func (m *Model) request(nodes []selectedNode, requested action) tea.Cmd {
 	if m.inProgress != "" {
 		m.setError(fmt.Sprintf("Firewall %s is already in progress.", m.inProgress))
@@ -170,13 +186,28 @@ func (m *Model) request(nodes []selectedNode, requested action) tea.Cmd {
 		}
 	}
 
+	m.nextGeneration++
 	m.inProgress = requested
 	m.inProgressNode = selected.node.ID
-	m.setStatus(fmt.Sprintf("Firewall %s in progress for %s…", requested, util.DisplayName(selected.node)))
-	return firewallCmd(m.controller, requested, selected.node.ID)
+	m.inProgressNodeName = util.DisplayName(selected.node)
+	m.inProgressGeneration = m.nextGeneration
+	m.setStatus(fmt.Sprintf("Firewall %s in progress for %s…", requested, m.inProgressNodeName))
+	return firewallCmd(
+		m.controller,
+		requested,
+		selected.node.ID,
+		m.inProgressNodeName,
+		m.inProgressGeneration,
+	)
 }
 
-func firewallCmd(ctrl controller.FirewallManager, requested action, nodeID string) tea.Cmd {
+func firewallCmd(
+	ctrl controller.FirewallManager,
+	requested action,
+	nodeID string,
+	nodeName string,
+	generation uint64,
+) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), firewallActionTimeout)
 		defer cancel()
@@ -190,7 +221,13 @@ func firewallCmd(ctrl controller.FirewallManager, requested action, nodeID strin
 		case actionReload:
 			err = ctrl.ReloadFirewall(ctx, nodeID)
 		}
-		return firewallResultMsg{action: requested, nodeID: nodeID, err: err}
+		return firewallResultMsg{
+			action:     requested,
+			nodeID:     nodeID,
+			nodeName:   nodeName,
+			generation: generation,
+			err:        err,
+		}
 	}
 }
 
@@ -375,6 +412,7 @@ func (m *Model) selectNode(nodes []selectedNode, delta int) {
 		return
 	}
 	m.nodeIdx = next
+	m.selectedID = nodes[next].node.ID
 	m.chainIdx = 0
 	m.offset = 0
 }
@@ -389,11 +427,24 @@ func (m *Model) current(nodes []selectedNode) (selectedNode, bool) {
 func (m *Model) clampSelection(nodes []selectedNode) {
 	if len(nodes) == 0 {
 		m.nodeIdx = 0
+		m.selectedID = ""
 		m.chainIdx = 0
 		m.offset = 0
 		return
 	}
-	m.nodeIdx = min(max(0, m.nodeIdx), len(nodes)-1)
+
+	if m.selectedID == "" {
+		m.nodeIdx = min(max(0, m.nodeIdx), len(nodes)-1)
+		m.selectedID = nodes[m.nodeIdx].node.ID
+	} else if idx := indexOfNode(nodes, m.selectedID); idx >= 0 {
+		m.nodeIdx = idx
+	} else {
+		m.nodeIdx = min(max(0, m.nodeIdx), len(nodes)-1)
+		m.selectedID = nodes[m.nodeIdx].node.ID
+		m.chainIdx = 0
+		m.offset = 0
+	}
+
 	chains := flattenChains(nodes[m.nodeIdx].firewall)
 	if len(chains) == 0 {
 		m.chainIdx = 0
@@ -401,6 +452,15 @@ func (m *Model) clampSelection(nodes []selectedNode) {
 		return
 	}
 	m.chainIdx = min(max(0, m.chainIdx), len(chains)-1)
+}
+
+func indexOfNode(nodes []selectedNode, nodeID string) int {
+	for idx := range nodes {
+		if nodes[idx].node.ID == nodeID {
+			return idx
+		}
+	}
+	return -1
 }
 
 func (m *Model) setStatus(message string) {
@@ -459,15 +519,6 @@ func flattenChains(firewall state.SystemFirewall) []state.FirewallChain {
 		chains = append(chains, group.Chains...)
 	}
 	return chains
-}
-
-func displayNodeID(snapshot state.Snapshot, nodeID string) string {
-	for _, node := range snapshot.Nodes {
-		if node.ID == nodeID {
-			return util.DisplayName(node)
-		}
-	}
-	return nodeID
 }
 
 func valueOrDash(value string) string {

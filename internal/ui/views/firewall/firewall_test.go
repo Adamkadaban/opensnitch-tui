@@ -92,6 +92,86 @@ func TestFirewallViewNodeAndChainSelection(t *testing.T) {
 	}
 }
 
+func TestFirewallViewSelectionTracksNodeIDAcrossInsertAndReorder(t *testing.T) {
+	store := state.NewStore()
+	store.SetNodes([]state.Node{
+		{ID: "node-a", Name: "alpha", Status: state.NodeStatusReady},
+		{ID: "node-c", Name: "charlie", Status: state.NodeStatusReady},
+	})
+	store.SetSystemFirewall("node-a", testFirewall(true, "alpha-output"))
+	store.SetSystemFirewall("node-c", testFirewall(true, "charlie-output"))
+	ctrl := &fakeFirewallController{}
+	model := New(store, theme.New(theme.Options{}), ctrl).(*Model)
+
+	model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if model.selectedID != "node-c" {
+		t.Fatalf("expected node C selected, got %q", model.selectedID)
+	}
+
+	store.SetNodes([]state.Node{
+		{ID: "node-b", Name: "bravo", Status: state.NodeStatusReady},
+		{ID: "node-a", Name: "alpha", Status: state.NodeStatusReady},
+		{ID: "node-c", Name: "charlie", Status: state.NodeStatusReady},
+	})
+	store.SetSystemFirewall("node-b", testFirewall(true, "bravo-output"))
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd == nil {
+		t.Fatal("expected reload command")
+	}
+	cmd()
+	if ctrl.nodeID != "node-c" {
+		t.Fatalf("expected action to remain targeted at node C, got %q", ctrl.nodeID)
+	}
+	if model.nodeIdx != 2 {
+		t.Fatalf("expected derived node index 2 after reorder, got %d", model.nodeIdx)
+	}
+}
+
+func TestFirewallViewSelectedNodeRemovalUsesDeterministicNeighbor(t *testing.T) {
+	tests := []struct {
+		name       string
+		selectNext int
+		removeID   string
+		wantID     string
+		wantIdx    int
+	}{
+		{name: "middle selects next", selectNext: 1, removeID: "node-b", wantID: "node-c", wantIdx: 1},
+		{name: "last selects previous", selectNext: 2, removeID: "node-c", wantID: "node-b", wantIdx: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := state.NewStore()
+			store.SetNodes([]state.Node{
+				{ID: "node-a", Name: "alpha", Status: state.NodeStatusReady},
+				{ID: "node-b", Name: "bravo", Status: state.NodeStatusReady},
+				{ID: "node-c", Name: "charlie", Status: state.NodeStatusReady},
+			})
+			for _, nodeID := range []string{"node-a", "node-b", "node-c"} {
+				store.SetSystemFirewall(nodeID, testFirewall(true, nodeID+"-output"))
+			}
+			model := New(store, theme.New(theme.Options{}), nil).(*Model)
+
+			for range tt.selectNext {
+				model.Update(tea.KeyMsg{Type: tea.KeyRight})
+			}
+			store.RemoveSystemFirewall(tt.removeID)
+			model.View()
+
+			if model.selectedID != tt.wantID || model.nodeIdx != tt.wantIdx {
+				t.Fatalf(
+					"expected fallback %s at index %d, got %s at index %d",
+					tt.wantID,
+					tt.wantIdx,
+					model.selectedID,
+					model.nodeIdx,
+				)
+			}
+		})
+	}
+}
+
 func TestFirewallViewKeyActionsAndAsyncResults(t *testing.T) {
 	tests := []struct {
 		key     rune
@@ -135,6 +215,64 @@ func TestFirewallViewKeyActionsAndAsyncResults(t *testing.T) {
 				t.Fatalf("expected success feedback, got %q", output)
 			}
 		})
+	}
+}
+
+func TestFirewallViewResultNamesOriginalActionNode(t *testing.T) {
+	store := state.NewStore()
+	store.SetNodes([]state.Node{
+		{ID: "node-a", Name: "alpha", Status: state.NodeStatusReady},
+		{ID: "node-c", Name: "charlie", Status: state.NodeStatusReady},
+	})
+	store.SetSystemFirewall("node-a", testFirewall(true, "alpha-output"))
+	store.SetSystemFirewall("node-c", testFirewall(true, "charlie-output"))
+	ctrl := &fakeFirewallController{}
+	model := New(store, theme.New(theme.Options{}), ctrl).(*Model)
+
+	model.Update(tea.KeyMsg{Type: tea.KeyRight})
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model.Update(cmd())
+
+	if output := model.View(); !strings.Contains(output, "acknowledged for charlie") {
+		t.Fatalf("expected feedback for original action node, got %q", output)
+	}
+}
+
+func TestFirewallViewIgnoresStaleResults(t *testing.T) {
+	store := state.NewStore()
+	store.SetNodes([]state.Node{
+		{ID: "node-a", Name: "alpha", Status: state.NodeStatusReady},
+		{ID: "node-c", Name: "charlie", Status: state.NodeStatusReady},
+	})
+	store.SetSystemFirewall("node-a", testFirewall(true, "alpha-output"))
+	store.SetSystemFirewall("node-c", testFirewall(true, "charlie-output"))
+	ctrl := &fakeFirewallController{}
+	model := New(store, theme.New(theme.Options{}), ctrl).(*Model)
+
+	_, firstCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	firstResult := firstCmd()
+	model.Update(firstResult)
+
+	_, secondCmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	secondGeneration := model.inProgressGeneration
+	model.Update(firstResult)
+	if model.inProgress != actionReload || model.inProgressGeneration != secondGeneration {
+		t.Fatal("stale generation cleared the current action")
+	}
+	model.Update(firewallResultMsg{
+		action:     actionReload,
+		nodeID:     "node-c",
+		nodeName:   "charlie",
+		generation: secondGeneration,
+	})
+	if model.inProgress != actionReload {
+		t.Fatal("stale node result cleared the current action")
+	}
+
+	model.Update(secondCmd())
+	if model.inProgress != "" {
+		t.Fatal("current result did not clear the action")
 	}
 }
 
