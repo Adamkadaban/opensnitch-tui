@@ -47,7 +47,7 @@ func TestTaskStreamReceivesMultipleRepliesWithStartID(t *testing.T) {
 	}
 }
 
-func TestStopTaskAwaitsAcknowledgementAndCleansStartStream(t *testing.T) {
+func TestStopTaskEnqueuesStopAndCleansStartStream(t *testing.T) {
 	srv, transport, stop := startNotificationTestStream(t, "node-1")
 	defer stop()
 
@@ -61,30 +61,15 @@ func TestStopTaskAwaitsAcknowledgementAndCleansStartStream(t *testing.T) {
 	}
 	start := <-transport.sent
 
-	stopped := make(chan error, 1)
-	go func() {
-		stopped <- srv.StopTask(context.Background(), stream)
-	}()
-
+	if err := srv.StopTask(context.Background(), stream); err != nil {
+		t.Fatalf("StopTask returned error: %v", err)
+	}
 	stopNotification := <-transport.sent
 	if stopNotification.GetType() != pb.Action_TASK_STOP {
 		t.Fatalf("expected TASK_STOP, got %s", stopNotification.GetType())
 	}
 	if stopNotification.GetData() != start.GetData() {
 		t.Fatalf("expected stop payload %s, got %s", start.GetData(), stopNotification.GetData())
-	}
-	select {
-	case err := <-stopped:
-		t.Fatalf("StopTask returned before acknowledgement: %v", err)
-	default:
-	}
-
-	transport.replies <- &pb.NotificationReply{
-		Id:   stopNotification.GetId(),
-		Code: pb.NotificationReplyCode_OK,
-	}
-	if err := <-stopped; err != nil {
-		t.Fatalf("StopTask returned error: %v", err)
 	}
 	waitForTaskDone(t, stream)
 	if stream.Err() != nil {
@@ -313,21 +298,12 @@ func TestStopTaskWorksAtPendingNotificationBound(t *testing.T) {
 		<-transport.sent
 	}
 
-	stopped := make(chan error, 1)
-	go func() {
-		stopped <- srv.StopTask(context.Background(), streams[0])
-	}()
-
+	if err := srv.StopTask(context.Background(), streams[0]); err != nil {
+		t.Fatalf("StopTask returned error at pending limit: %v", err)
+	}
 	stopNotification := <-transport.sent
 	if stopNotification.GetType() != pb.Action_TASK_STOP {
 		t.Fatalf("expected TASK_STOP, got %s", stopNotification.GetType())
-	}
-	transport.replies <- &pb.NotificationReply{
-		Id:   stopNotification.GetId(),
-		Code: pb.NotificationReplyCode_OK,
-	}
-	if err := <-stopped; err != nil {
-		t.Fatalf("StopTask returned error at pending limit: %v", err)
 	}
 	waitForTaskDone(t, streams[0])
 	if got := pendingNotificationCount(streams[1]); got != notificationPendingLimit-1 {
