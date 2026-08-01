@@ -157,6 +157,7 @@ type Rule struct {
 	Precedence  bool
 	NoLog       bool
 	CreatedAt   time.Time
+	UpdatedAt   time.Time
 	Operator    RuleOperator
 }
 

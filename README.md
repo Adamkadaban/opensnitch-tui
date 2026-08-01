@@ -51,7 +51,7 @@ nodes: []
 
 ## 🧭 Usage (key hints)
 - **Navigation:** arrow keys only (no vi keys)
-- **Rules view:** `e` enable · `d` disable · `x` delete · `m` modify
+- **Rules view:** `c` copy · `i` import · `o` export · `e` enable · `d` disable · `x` delete · `m` modify
 - **Firewall view:** `←`/`→` select node · `↑`/`↓` select chain · `e` enable · `d` disable · `r` reload rules
 - **Tasks view:** `←`/`→` select node · `↑`/`↓` select task profile · `s` start · `x` stop
 - **Nodes view:** `↑`/`↓` select node · `Enter` details · `e` enter/exit safe config editing · arrows or `Enter`/`space` change values · `s` save · `esc` cancel/back
@@ -64,10 +64,21 @@ nodes: []
 - **Rule directory:** set `yara_rule_dir: /path/to/yara_rules` (files ending in `.yar` / `.yara`). Rules are compiled once per directory and cached.
 - **Disable at build time:** `go build -tags no_yara` (or `CGO_ENABLED=0`) uses a stub; YARA features will surface `yara not available`.
 
+## 📦 Rule archives
+
+The Rules view imports and exports only the currently selected, connected node. Archives use canonical, indented JSON with one rule per file under:
+
+```text
+${XDG_DATA_HOME:-~/.local/share}/opensnitch-tui/rules/<sanitized-node>/
+```
+
+Directories are `0700`, files are `0600`, and exports use atomic replacement. Filenames are sanitized, while rule names inside JSON remain unchanged. Import reads only regular `.json` files from that fixed node directory and rejects links, malformed or duplicate rules, unsafe operator trees, and oversized batches. Same-name rules replace existing rules only after the daemon acknowledges the `CHANGE_RULE` batch; daemon errors leave the in-memory rule state unchanged.
+
 ## 🗂 Repository Layout
 - `cmd/opensnitch-tui/` — CLI entrypoint
 - `internal/app/` — wiring: config, state, Bubble Tea program
 - `internal/state/` — central store, reducers, selectors
+- `internal/rulearchive/` — secure node-scoped canonical JSON import/export
 - `internal/ui/` — router and views (dashboard, events, alerts, rules, nodes, settings, prompt)
 - `internal/daemon/` — mock/server shim for tests; notification plumbing
 - `internal/controller/` — interfaces for rule/prompt/settings managers

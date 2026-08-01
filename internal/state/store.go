@@ -291,6 +291,48 @@ func (s *Store) AddRule(nodeID string, rule Rule) {
 	s.notifyLocked()
 }
 
+// ApplyRules replaces same-name rules and appends new rules for one node.
+func (s *Store) ApplyRules(nodeID string, incoming []Rule) {
+	if len(incoming) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.snapshot.Rules == nil {
+		s.snapshot.Rules = make(map[string][]Rule)
+	}
+	replacements := make(map[string]Rule, len(incoming))
+	order := make([]string, 0, len(incoming))
+	for _, rule := range incoming {
+		rule.NodeID = nodeID
+		if _, exists := replacements[rule.Name]; !exists {
+			order = append(order, rule.Name)
+		}
+		replacements[rule.Name] = cloneRule(rule)
+	}
+
+	current := s.snapshot.Rules[nodeID]
+	merged := make([]Rule, 0, len(current)+len(incoming))
+	for _, rule := range current {
+		replacement, ok := replacements[rule.Name]
+		if !ok {
+			merged = append(merged, cloneRule(rule))
+			continue
+		}
+		merged = append(merged, replacement)
+		delete(replacements, rule.Name)
+	}
+	for _, name := range order {
+		if rule, ok := replacements[name]; ok {
+			merged = append(merged, rule)
+		}
+	}
+	s.snapshot.Rules[nodeID] = merged
+	s.syncRuleCountLocked(nodeID)
+	s.notifyLocked()
+}
+
 func (s *Store) UpdateRule(nodeID, ruleName string, fn func(*Rule)) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ type Model struct {
 	store      *state.Store
 	theme      theme.Theme
 	controller controller.RuleManager
+	batch      controller.RuleBatchManager
+	archive    controller.RuleArchive
 
 	width  int
 	height int
@@ -32,7 +35,9 @@ type Model struct {
 	tableXOffset  int
 	tableMaxWidth int
 
-	statusLine string
+	statusLine   string
+	inProgress   ruleOperation
+	progressNode string
 
 	editing        bool
 	editFocus      int
@@ -59,6 +64,26 @@ const (
 	minNoLogWidth      = 6
 	minOperatorWidth   = 14
 )
+
+const ruleOperationTimeout = 15 * time.Second
+
+type ruleOperation string
+
+const (
+	operationCopy   ruleOperation = "copy"
+	operationImport ruleOperation = "import"
+	operationExport ruleOperation = "export"
+)
+
+type ruleOperationMsg struct {
+	operation ruleOperation
+	nodeID    string
+	nodeName  string
+	ruleName  string
+	path      string
+	count     int
+	err       error
+}
 
 const (
 	editFieldDescription = iota
@@ -100,8 +125,15 @@ func (tl tableLayout) total() int {
 
 func (tl tableLayout) count() int { return 8 }
 
-func New(store *state.Store, th theme.Theme, ctrl controller.RuleManager) view.Model {
-	return &Model{store: store, theme: th, controller: ctrl}
+func New(store *state.Store, th theme.Theme, ctrl controller.RuleManager, archives ...controller.RuleArchive) view.Model {
+	model := &Model{store: store, theme: th, controller: ctrl}
+	if batch, ok := ctrl.(controller.RuleBatchManager); ok {
+		model.batch = batch
+	}
+	if len(archives) > 0 {
+		model.archive = archives[0]
+	}
+	return model
 }
 
 func (m *Model) Init() tea.Cmd { return nil }
@@ -111,6 +143,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.clampSelection(snapshot)
 
 	switch key := msg.(type) {
+	case ruleOperationMsg:
+		if key.operation != m.inProgress || key.nodeID != m.progressNode {
+			return m, nil
+		}
+		m.inProgress = ""
+		m.progressNode = ""
+		if key.err != nil {
+			m.statusLine = m.theme.Danger.Render(fmt.Sprintf("%s failed for %s: %v", operationTitle(key.operation), key.nodeName, key.err))
+			return m, nil
+		}
+		switch key.operation {
+		case operationCopy:
+			m.selectRule(snapshot, key.nodeID, key.ruleName)
+			m.statusLine = m.theme.Success.Render(fmt.Sprintf("Copied rule as %s on %s.", key.ruleName, key.nodeName))
+		case operationImport:
+			m.statusLine = m.theme.Success.Render(fmt.Sprintf("Imported %d rule(s) for %s from %s.", key.count, key.nodeName, key.path))
+		case operationExport:
+			m.statusLine = m.theme.Success.Render(fmt.Sprintf("Exported %d rule(s) for %s to %s.", key.count, key.nodeName, key.path))
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if m.editing {
 			switch key.Type {
@@ -183,6 +235,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.requestDelete(snapshot)
 		case "m":
 			m.startEdit(snapshot)
+		case "c":
+			return m, m.requestCopy(snapshot)
+		case "i":
+			return m, m.requestImport(snapshot)
+		case "o":
+			return m, m.requestExport(snapshot)
 		}
 	}
 
@@ -196,7 +254,7 @@ func (m *Model) View() string {
 	nodes := snapshot.Nodes
 	if len(nodes) == 0 {
 		msg := m.theme.Subtle.Render("No nodes connected. Awaiting daemon subscriptions.")
-		return m.wrap(msg)
+		return m.wrap(lipgloss.JoinVertical(lipgloss.Left, msg, m.renderStatus()))
 	}
 
 	_, rules, ok := m.current(snapshot)
@@ -228,6 +286,12 @@ func (m *Model) SetSize(width, height int) {
 
 func (m *Model) SetTheme(th theme.Theme) {
 	m.theme = th
+}
+
+// HandlesMessage accepts completed archive operations while this view is inactive.
+func (m *Model) HandlesMessage(msg tea.Msg) bool {
+	_, ok := msg.(ruleOperationMsg)
+	return ok
 }
 
 func (m *Model) renderNodes(snapshot state.Snapshot) string {
@@ -511,13 +575,170 @@ func (m *Model) renderStatus() string {
 	if m.editing {
 		help = "esc cancel · enter save · tab/shift+tab · ←/→ change"
 	} else {
-		help = "←/→ scroll · [/] nodes · ↑/↓ rules · e enable · d disable · x delete · m modify"
+		help = "←/→ scroll · [/] nodes · ↑/↓ rules · c/i/o copy/import/export · e/d toggle · x delete · m modify"
 	}
 	helpRendered := m.theme.Subtle.Render(help)
 	if m.statusLine == "" {
 		return helpRendered
 	}
 	return fmt.Sprintf("%s\n%s", m.statusLine, helpRendered)
+}
+
+func (m *Model) requestCopy(snapshot state.Snapshot) tea.Cmd {
+	node, rules, ok := m.actionSelection(snapshot, true, true)
+	if !ok {
+		return nil
+	}
+	source := rules[min(m.ruleIdx, len(rules)-1)]
+	if strings.TrimSpace(source.Name) == "" {
+		m.statusLine = m.theme.Danger.Render("Selected rule has no name")
+		return nil
+	}
+	copyRule := source
+	copyRule.Name = availableCopyName(source.Name, rules)
+	copyRule.NodeID = node.ID
+	copyRule.CreatedAt = time.Time{}
+	copyRule.UpdatedAt = time.Time{}
+	m.startOperation(operationCopy, node, fmt.Sprintf("Copying %s as %s on %s…", source.Name, copyRule.Name, util.DisplayName(node)))
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), ruleOperationTimeout)
+		defer cancel()
+		err := m.batch.ApplyRules(ctx, node.ID, []state.Rule{copyRule})
+		return ruleOperationMsg{
+			operation: operationCopy,
+			nodeID:    node.ID,
+			nodeName:  util.DisplayName(node),
+			ruleName:  copyRule.Name,
+			count:     1,
+			err:       err,
+		}
+	}
+}
+
+func (m *Model) requestImport(snapshot state.Snapshot) tea.Cmd {
+	node, _, ok := m.actionSelection(snapshot, false, true)
+	if !ok {
+		return nil
+	}
+	if m.archive == nil {
+		m.statusLine = m.theme.Danger.Render("Rule archive service unavailable")
+		return nil
+	}
+	path := m.archive.Directory(node)
+	m.startOperation(operationImport, node, fmt.Sprintf("Importing rules for %s from %s…", util.DisplayName(node), path))
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), ruleOperationTimeout)
+		defer cancel()
+		rules, resolved, err := m.archive.Import(ctx, node)
+		if err == nil {
+			err = m.batch.ApplyRules(ctx, node.ID, rules)
+		}
+		return ruleOperationMsg{
+			operation: operationImport,
+			nodeID:    node.ID,
+			nodeName:  util.DisplayName(node),
+			path:      resolved,
+			count:     len(rules),
+			err:       err,
+		}
+	}
+}
+
+func (m *Model) requestExport(snapshot state.Snapshot) tea.Cmd {
+	node, rules, ok := m.actionSelection(snapshot, true, false)
+	if !ok {
+		return nil
+	}
+	if m.archive == nil {
+		m.statusLine = m.theme.Danger.Render("Rule archive service unavailable")
+		return nil
+	}
+	path := m.archive.Directory(node)
+	m.startOperation(operationExport, node, fmt.Sprintf("Exporting %d rule(s) for %s to %s…", len(rules), util.DisplayName(node), path))
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), ruleOperationTimeout)
+		defer cancel()
+		resolved, err := m.archive.Export(ctx, node, rules)
+		return ruleOperationMsg{
+			operation: operationExport,
+			nodeID:    node.ID,
+			nodeName:  util.DisplayName(node),
+			path:      resolved,
+			count:     len(rules),
+			err:       err,
+		}
+	}
+}
+
+func (m *Model) actionSelection(snapshot state.Snapshot, requireRules, requireController bool) (state.Node, []state.Rule, bool) {
+	if m.inProgress != "" {
+		m.statusLine = m.theme.Danger.Render(fmt.Sprintf("%s already in progress", operationTitle(m.inProgress)))
+		return state.Node{}, nil, false
+	}
+	node, rules, ok := m.current(snapshot)
+	if !ok {
+		m.statusLine = m.theme.Danger.Render("No node selected")
+		return state.Node{}, nil, false
+	}
+	if node.Status != state.NodeStatusReady {
+		m.statusLine = m.theme.Danger.Render(fmt.Sprintf("%s is not connected", util.DisplayName(node)))
+		return state.Node{}, nil, false
+	}
+	if requireRules && len(rules) == 0 {
+		m.statusLine = m.theme.Danger.Render(fmt.Sprintf("No rules available for %s", util.DisplayName(node)))
+		return state.Node{}, nil, false
+	}
+	if requireController && m.batch == nil {
+		m.statusLine = m.theme.Danger.Render("Rules controller unavailable")
+		return state.Node{}, nil, false
+	}
+	return node, rules, true
+}
+
+func (m *Model) startOperation(operation ruleOperation, node state.Node, status string) {
+	m.inProgress = operation
+	m.progressNode = node.ID
+	m.statusLine = m.theme.Warning.Render(status)
+}
+
+func (m *Model) selectRule(snapshot state.Snapshot, nodeID, ruleName string) {
+	node, rules, ok := m.current(snapshot)
+	if !ok || node.ID != nodeID {
+		return
+	}
+	for i, rule := range rules {
+		if rule.Name == ruleName {
+			m.ruleIdx = i
+			m.clampSelection(snapshot)
+			return
+		}
+	}
+}
+
+func availableCopyName(name string, rules []state.Rule) string {
+	existing := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		existing[rule.Name] = struct{}{}
+	}
+	for i := 1; ; i++ {
+		candidate := fmt.Sprintf("%s-copy-%d", name, i)
+		if _, ok := existing[candidate]; !ok {
+			return candidate
+		}
+	}
+}
+
+func operationTitle(operation ruleOperation) string {
+	switch operation {
+	case operationCopy:
+		return "Copy"
+	case operationImport:
+		return "Import"
+	case operationExport:
+		return "Export"
+	default:
+		return "Rule operation"
+	}
 }
 
 func (m *Model) wrap(body string) string {

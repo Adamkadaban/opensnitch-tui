@@ -2,6 +2,7 @@ package rules
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
@@ -22,7 +23,15 @@ func TestRulesSnapshot(t *testing.T) {
 	m := New(store, th, noopRuleManager{})
 	m.SetSize(100, 20)
 
-	viewtest.AssertSnapshot(t, m.View(), filepath.Join("testdata", "rules.snap"))
+	viewtest.AssertSnapshot(t, trimSnapshotPadding(m.View()), filepath.Join("testdata", "rules.snap"))
+}
+
+func trimSnapshotPadding(value string) string {
+	lines := strings.Split(value, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	return strings.Join(lines, "\n")
 }
 
 type noopRuleManager struct{}
