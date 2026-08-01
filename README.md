@@ -31,6 +31,7 @@ make run ARGS="-config ~/.config/opensnitch-tui/config.yaml"
 Common flags:
 - `-config PATH` — YAML config (default `~/.config/opensnitch-tui/config.yaml`)
 - `-theme light|dark|auto` — session theme override
+- `-listen ADDRESS` — daemon listener (default `unix:///tmp/osui.sock`; TCP addresses remain supported)
 
 ## ⚙️ Configuration
 Default location: `~/.config/opensnitch-tui/config.yaml`
