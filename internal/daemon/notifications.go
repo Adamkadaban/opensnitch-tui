@@ -1,0 +1,253 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+
+	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	notificationQueueSize    = 8
+	notificationPendingLimit = 8
+)
+
+var (
+	ErrUnknownNotificationNode      = errors.New("unknown notification node")
+	ErrNotificationNodeDisconnected = errors.New("notification node disconnected")
+	ErrDuplicateNotificationSession = errors.New("notification session already connected")
+	ErrDuplicateNotificationID      = errors.New("duplicate notification id")
+	ErrNotificationQueueFull        = errors.New("notification queue full")
+	ErrNotificationBackpressure     = errors.New("too many pending notifications")
+	ErrNotificationSessionClosed    = errors.New("notification session closed")
+	ErrNilNotification              = errors.New("notification is nil")
+)
+
+// NotificationReplyError reports a daemon-side notification failure.
+type NotificationReplyError struct {
+	NodeID string
+	Reply  *pb.NotificationReply
+}
+
+func (e *NotificationReplyError) Error() string {
+	if e.Reply.GetData() != "" {
+		return fmt.Sprintf("notification %d failed for %s: %s", e.Reply.GetId(), e.NodeID, e.Reply.GetData())
+	}
+	return fmt.Sprintf("notification %d failed for %s", e.Reply.GetId(), e.NodeID)
+}
+
+type notificationReceive struct {
+	reply *pb.NotificationReply
+	err   error
+}
+
+func newNotificationSession(nodeID string) *session {
+	return &session{
+		nodeID:  nodeID,
+		send:    make(chan *pb.Notification, notificationQueueSize),
+		done:    make(chan struct{}),
+		pending: make(map[uint64]chan *pb.NotificationReply),
+	}
+}
+
+// SendNotification sends a notification to one connected node and waits for its reply.
+func (s *Server) SendNotification(
+	ctx context.Context,
+	nodeID string,
+	notification *pb.Notification,
+) (*pb.NotificationReply, error) {
+	if notification == nil {
+		return nil, ErrNilNotification
+	}
+	if nodeID == "" || nodeID == "unknown" {
+		return nil, ErrUnknownNotificationNode
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.sessionsMu.RLock()
+	sess, ok := s.sessions[nodeID]
+	s.sessionsMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNotificationNodeDisconnected, nodeID)
+	}
+
+	outbound := proto.Clone(notification).(*pb.Notification)
+	outbound.Id = s.nextNotificationID()
+	outbound.ClientName = nodeID
+	outbound.ServerName = s.opts.ServerName
+
+	replyCh := make(chan *pb.NotificationReply, 1)
+	if err := sess.addPending(outbound.Id, replyCh); err != nil {
+		return nil, err
+	}
+	if err := sess.enqueue(outbound); err != nil {
+		sess.removePending(outbound.Id, replyCh)
+		return nil, err
+	}
+
+	select {
+	case reply := <-replyCh:
+		if reply.GetCode() == pb.NotificationReplyCode_ERROR {
+			return reply, &NotificationReplyError{NodeID: nodeID, Reply: reply}
+		}
+		return reply, nil
+	case <-ctx.Done():
+		sess.removePending(outbound.Id, replyCh)
+		return nil, ctx.Err()
+	case <-sess.done:
+		sess.removePending(outbound.Id, replyCh)
+		return nil, sess.closedError()
+	}
+}
+
+func (s *Server) nextNotificationID() uint64 {
+	for {
+		if id := atomic.AddUint64(&s.notifySeqID, 1); id != 0 {
+			return id
+		}
+	}
+}
+
+func (s *Server) registerSession(nodeID string) (*session, error) {
+	if nodeID == "" || nodeID == "unknown" {
+		return nil, ErrUnknownNotificationNode
+	}
+
+	sess := newNotificationSession(nodeID)
+	s.sessionsMu.Lock()
+	defer s.sessionsMu.Unlock()
+	if s.sessionsClosed {
+		return nil, ErrNotificationSessionClosed
+	}
+	if _, ok := s.sessions[nodeID]; ok {
+		return nil, fmt.Errorf("%w: %s", ErrDuplicateNotificationSession, nodeID)
+	}
+	s.sessions[nodeID] = sess
+	return sess, nil
+}
+
+func (s *Server) unregisterSession(nodeID string, sess *session, cause error) {
+	s.sessionsMu.Lock()
+	if current, ok := s.sessions[nodeID]; ok && current == sess {
+		delete(s.sessions, nodeID)
+	}
+	s.sessionsMu.Unlock()
+	sess.close(cause)
+}
+
+func (s *Server) closeSessions(cause error) {
+	s.sessionsMu.Lock()
+	s.sessionsClosed = true
+	sessions := make([]*session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.sessionsMu.Unlock()
+
+	for _, sess := range sessions {
+		sess.close(cause)
+	}
+}
+
+func (sess *session) addPending(id uint64, replyCh chan *pb.NotificationReply) error {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.closeErr != nil {
+		return sess.closedErrorLocked()
+	}
+	if _, ok := sess.pending[id]; ok {
+		return fmt.Errorf("%w: %d", ErrDuplicateNotificationID, id)
+	}
+	if len(sess.pending) >= notificationPendingLimit {
+		return fmt.Errorf("%w for %s", ErrNotificationBackpressure, sess.nodeID)
+	}
+	sess.pending[id] = replyCh
+	return nil
+}
+
+func (sess *session) removePending(id uint64, replyCh chan *pb.NotificationReply) {
+	sess.mu.Lock()
+	if current, ok := sess.pending[id]; ok && current == replyCh {
+		delete(sess.pending, id)
+	}
+	sess.mu.Unlock()
+}
+
+func (sess *session) complete(reply *pb.NotificationReply) bool {
+	sess.mu.Lock()
+	replyCh, ok := sess.pending[reply.GetId()]
+	if ok {
+		delete(sess.pending, reply.GetId())
+	}
+	sess.mu.Unlock()
+	if !ok {
+		return false
+	}
+	replyCh <- reply
+	return true
+}
+
+func (sess *session) enqueue(notification *pb.Notification) error {
+	if sess.done != nil {
+		select {
+		case <-sess.done:
+			return sess.closedError()
+		default:
+		}
+	}
+	select {
+	case sess.send <- notification:
+		return nil
+	default:
+		return fmt.Errorf("%w for %s", ErrNotificationQueueFull, sess.nodeID)
+	}
+}
+
+func (sess *session) close(cause error) {
+	sess.closeOnce.Do(func() {
+		if cause == nil {
+			cause = ErrNotificationSessionClosed
+		}
+		sess.mu.Lock()
+		sess.closeErr = cause
+		clear(sess.pending)
+		sess.mu.Unlock()
+		close(sess.done)
+	})
+}
+
+func (sess *session) closedError() error {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.closedErrorLocked()
+}
+
+func (sess *session) closedErrorLocked() error {
+	if sess.closeErr == nil || errors.Is(sess.closeErr, ErrNotificationSessionClosed) {
+		return fmt.Errorf("%w for %s", ErrNotificationSessionClosed, sess.nodeID)
+	}
+	return fmt.Errorf("%w for %s: %v", ErrNotificationSessionClosed, sess.nodeID, sess.closeErr)
+}
+
+func receiveNotificationReplies(
+	ctx context.Context,
+	stream pb.UI_NotificationsServer,
+	replies chan<- notificationReceive,
+) {
+	for {
+		reply, err := stream.Recv()
+		select {
+		case replies <- notificationReceive{reply: reply, err: err}:
+		case <-ctx.Done():
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
