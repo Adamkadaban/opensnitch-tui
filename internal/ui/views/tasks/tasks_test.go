@@ -203,6 +203,164 @@ func TestTaskViewStartsAsynchronouslyAndConsumesMultipleUpdates(t *testing.T) {
 	}
 }
 
+func TestTaskViewWaitsForFirstRemoteTelemetryUpdate(t *testing.T) {
+	model, _, _, _ := startNodeTask(t)
+	model.SetSize(80, 20)
+	runtime := model.runtime(taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor})
+	if runtime.phase != phaseWaiting {
+		t.Fatalf("expected waiting phase, got %s", runtime.phase)
+	}
+
+	output := model.View()
+	for _, want := range []string{
+		"WAITING",
+		"Waiting for first Node monitor update",
+		"5s interval",
+		"15s timeout",
+		"Remote daemon telemetry only",
+		"do not enable firewall features",
+		"selected profile details",
+		"other tabs are unchanged",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in waiting task view, got %q", want, output)
+		}
+	}
+}
+
+func TestTaskViewFirstUpdateTimeoutStopsStream(t *testing.T) {
+	model, manager, stream, _ := startNodeTask(t)
+	call := manager.snapshot()
+	key := taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor}
+	generation := model.runtime(key).generation
+
+	_, cleanupCmd := model.Update(taskFirstUpdateTimeoutMsg{
+		key:        key,
+		generation: generation,
+		streamID:   stream.ID(),
+	})
+	if cleanupCmd == nil {
+		t.Fatal("expected asynchronous timeout cleanup command")
+	}
+	if got := manager.snapshot().stopCalls; got != 0 {
+		t.Fatalf("Update blocked on timeout cleanup; got %d stop calls", got)
+	}
+
+	runtime := model.runtime(key)
+	if runtime.phase != phaseError || runtime.stream != nil {
+		t.Fatalf("expected timeout error with detached stream, got %+v", runtime)
+	}
+	model.SetSize(80, 20)
+	output := model.View()
+	for _, want := range []string{
+		"No first update in 15s",
+		"unsupported/disabled",
+		"OpenSnitch v1.8",
+		"daemon task configuration/logs",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in timeout feedback, got %q", want, output)
+		}
+	}
+	if got := lipgloss.Width(output); got > 80 {
+		t.Fatalf("timeout output width %d exceeds 80", got)
+	}
+	if got := lipgloss.Height(output); got > 20 {
+		t.Fatalf("timeout output height %d exceeds 20", got)
+	}
+
+	_ = cleanupCmd()
+	if got := manager.snapshot().stopCalls; got != 1 {
+		t.Fatalf("expected one best-effort stop call, got %d", got)
+	}
+	select {
+	case <-call.startCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("timeout cleanup did not cancel the stream context")
+	}
+}
+
+func TestTaskWaitCommandEmitsBoundedFirstUpdateTimeout(t *testing.T) {
+	stream := newFakeTaskStream(60, "node-1", controller.TaskNodeMonitor)
+	key := taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor}
+
+	msg := waitTaskCmd(key, 7, stream, time.Now())()
+	timeout, ok := msg.(taskFirstUpdateTimeoutMsg)
+	if !ok {
+		t.Fatalf("expected first-update timeout message, got %T", msg)
+	}
+	if timeout.key != key || timeout.generation != 7 || timeout.streamID != stream.ID() {
+		t.Fatalf("unexpected timeout identity: %+v", timeout)
+	}
+}
+
+func TestTaskViewFirstValidUpdateBeatsTimeout(t *testing.T) {
+	model, manager, stream, waitCmd := startNodeTask(t)
+	key := taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor}
+	generation := model.runtime(key).generation
+
+	stream.updates <- controller.TaskUpdate{Data: json.RawMessage(
+		`{"Uptime":9,"Loads":[65536,0,0],"Procs":3}`,
+	)}
+	_, nextWait := model.Update(waitCmd())
+	if nextWait == nil {
+		t.Fatal("expected continuous wait command after first update")
+	}
+
+	_, cleanupCmd := model.Update(taskFirstUpdateTimeoutMsg{
+		key:        key,
+		generation: generation,
+		streamID:   stream.ID(),
+	})
+	if cleanupCmd != nil {
+		t.Fatal("valid first update should invalidate its timeout")
+	}
+	runtime := model.runtime(key)
+	if runtime.phase != phaseRunning || !runtime.receivedFirstUpdate {
+		t.Fatalf("expected running stream after first update, got %+v", runtime)
+	}
+	if got := manager.snapshot().stopCalls; got != 0 {
+		t.Fatalf("first update timeout stopped a running stream: %d calls", got)
+	}
+}
+
+func TestTaskViewIgnoresStaleFirstUpdateTimeoutAfterRestart(t *testing.T) {
+	model, manager, oldStream, _ := startNodeTask(t)
+	key := taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor}
+	oldGeneration := model.runtime(key).generation
+
+	_, cleanupCmd := model.Update(taskFirstUpdateTimeoutMsg{
+		key:        key,
+		generation: oldGeneration,
+		streamID:   oldStream.ID(),
+	})
+	_ = cleanupCmd()
+
+	newStream := newFakeTaskStream(61, "node-1", controller.TaskNodeMonitor)
+	manager.mu.Lock()
+	manager.stream = newStream
+	manager.mu.Unlock()
+	_, startCmd := model.Update(keyRune('s'))
+	_, _ = model.Update(startCmd())
+
+	runtime := model.runtime(key)
+	newGeneration := runtime.generation
+	_, staleCleanup := model.Update(taskFirstUpdateTimeoutMsg{
+		key:        key,
+		generation: oldGeneration,
+		streamID:   oldStream.ID(),
+	})
+	if staleCleanup != nil {
+		t.Fatal("stale timeout returned a cleanup command")
+	}
+	if runtime.phase != phaseWaiting || runtime.generation != newGeneration || runtime.stream != newStream {
+		t.Fatalf("stale timeout changed restarted task: %+v", runtime)
+	}
+	if got := manager.snapshot().stopCalls; got != 1 {
+		t.Fatalf("stale timeout stopped the restarted stream: %d calls", got)
+	}
+}
+
 func TestSocketsProfileUsesTypedDefaultFiltersAndSanitizesProcesses(t *testing.T) {
 	store := readyTaskStore(state.Node{
 		ID:      "tcp://10.0.0.2:50051",
@@ -297,6 +455,25 @@ func TestTaskViewStopAcknowledgementAndIdleGuard(t *testing.T) {
 	}
 }
 
+func TestTaskViewUpdateWhileStoppingPreservesStopAcknowledgement(t *testing.T) {
+	model, _, stream, waitCmd := startNodeTask(t)
+
+	_, stopCmd := model.Update(keyRune('x'))
+	stream.updates <- controller.TaskUpdate{Data: json.RawMessage(
+		`{"Uptime":20,"Loads":[0,0,0],"Procs":2}`,
+	)}
+	_, _ = model.Update(waitCmd())
+
+	key := taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor}
+	if runtime := model.runtime(key); runtime.phase != phaseStopping || !runtime.receivedFirstUpdate {
+		t.Fatalf("expected stopping phase to survive an update, got %+v", runtime)
+	}
+	_, _ = model.Update(stopCmd())
+	if runtime := model.runtime(key); runtime.phase != phaseIdle {
+		t.Fatalf("expected stop acknowledgement after in-flight update, got %+v", runtime)
+	}
+}
+
 func TestTaskViewStopErrorKeepsStreamRunning(t *testing.T) {
 	model, manager, _, _ := startNodeTask(t)
 	manager.mu.Lock()
@@ -307,8 +484,8 @@ func TestTaskViewStopErrorKeepsStreamRunning(t *testing.T) {
 	_, _ = model.Update(stopCmd())
 
 	runtime := model.runtime(taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor})
-	if runtime.phase != phaseRunning || runtime.stream == nil {
-		t.Fatalf("expected stream to remain running after stop error, got %+v", runtime)
+	if runtime.phase != phaseWaiting || runtime.stream == nil {
+		t.Fatalf("expected stream to keep waiting after stop error, got %+v", runtime)
 	}
 	if output := model.View(); !strings.Contains(output, "stop unavailable") {
 		t.Fatalf("expected stop error feedback, got %q", output)
@@ -461,13 +638,66 @@ func TestTaskViewCloseCancelsOwnedContexts(t *testing.T) {
 	}
 }
 
+func TestTaskViewRunsNodeAndSocketsProfilesTogether(t *testing.T) {
+	model, manager, nodeStream, nodeWait := startNodeTask(t)
+	nodeKey := taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor}
+
+	model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	socketStream := newFakeTaskStream(62, "node-1", controller.TaskSocketsMonitor)
+	manager.mu.Lock()
+	manager.stream = socketStream
+	manager.mu.Unlock()
+	_, startCmd := model.Update(keyRune('s'))
+	_, socketWait := model.Update(startCmd())
+
+	socketKey := taskKey{nodeID: "node-1", name: controller.TaskSocketsMonitor}
+	if model.runtime(nodeKey).phase != phaseWaiting || model.runtime(socketKey).phase != phaseWaiting {
+		t.Fatalf("expected both profiles to wait independently: node=%+v sockets=%+v",
+			model.runtime(nodeKey), model.runtime(socketKey))
+	}
+
+	nodeStream.updates <- controller.TaskUpdate{Data: json.RawMessage(
+		`{"Uptime":12,"Loads":[0,0,0],"Procs":4}`,
+	)}
+	socketStream.updates <- controller.TaskUpdate{Data: json.RawMessage(
+		`{"Table":[{"Socket":{"Family":2,"State":1},"Proto":6}]}`,
+	)}
+	_, _ = model.Update(nodeWait())
+	_, _ = model.Update(socketWait())
+
+	if model.runtime(nodeKey).phase != phaseRunning || model.runtime(socketKey).phase != phaseRunning {
+		t.Fatalf("expected simultaneous running profiles: node=%+v sockets=%+v",
+			model.runtime(nodeKey), model.runtime(socketKey))
+	}
+	if !strings.Contains(model.runtime(nodeKey).preview, `"uptime_seconds": 12`) {
+		t.Fatalf("node summary missing: %q", model.runtime(nodeKey).preview)
+	}
+	if !strings.Contains(model.runtime(socketKey).preview, `"socket_count": 1`) {
+		t.Fatalf("sockets summary missing: %q", model.runtime(socketKey).preview)
+	}
+}
+
+func TestTaskViewRoutesFirstUpdateTimeoutWhileInactive(t *testing.T) {
+	model, _, stream, _ := startNodeTask(t)
+	key := taskKey{nodeID: "node-1", name: controller.TaskNodeMonitor}
+	msg := taskFirstUpdateTimeoutMsg{
+		key:        key,
+		generation: model.runtime(key).generation,
+		streamID:   stream.ID(),
+	}
+	if !model.HandlesMessage(msg) {
+		t.Fatal("expected timeout message to route while Tasks is inactive")
+	}
+}
+
 func TestTaskViewFitsTerminalBounds(t *testing.T) {
 	for _, size := range []struct {
 		width  int
 		height int
 	}{
 		{width: 120, height: 40},
-		{width: 80, height: 40},
+		{width: 80, height: 24},
+		{width: 80, height: 20},
 	} {
 		store := readyTaskStore(state.Node{
 			ID:      "tcp://10.0.0.2:50051",
@@ -483,7 +713,11 @@ func TestTaskViewFitsTerminalBounds(t *testing.T) {
 		})
 		runtime.phase = phaseRunning
 		runtime.lastUpdate = time.Now()
-		runtime.preview = strings.Repeat(`{"bounded":"value"}`+"\n", 30)
+		runtime.preview = "{\n" +
+			`  "uptime_seconds": 42,` + "\n" +
+			`  "process_count": 7,` + "\n" +
+			strings.Repeat(`  "bounded": "value",`+"\n", 30) +
+			`  "load_average": [1, 2, 3]` + "\n}"
 
 		output := model.View()
 		if got := lipgloss.Width(output); got > size.width {
@@ -491,6 +725,11 @@ func TestTaskViewFitsTerminalBounds(t *testing.T) {
 		}
 		if got := lipgloss.Height(output); got > size.height {
 			t.Fatalf("rendered height %d exceeds terminal height %d", got, size.height)
+		}
+		for _, want := range []string{"Remote daemon telemetry", "last update", `"uptime_seconds"`} {
+			if !strings.Contains(output, want) {
+				t.Fatalf("%dx%d output missing %q: %q", size.width, size.height, want, output)
+			}
 		}
 	}
 }

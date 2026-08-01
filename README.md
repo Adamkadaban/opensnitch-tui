@@ -59,6 +59,16 @@ nodes: []
 - **Prompt dialog:** arrows to move focus/choices; `a` allow · `d` deny · `r` reject · `v` advanced matches · `space`/`Enter` toggle advanced conditions
 - **Tables:** arrows to move; PgUp/PgDn/Home/End for paging
 
+## Tasks
+
+Tasks are remote OpenSnitch daemon telemetry streams; starting one does not enable firewall features or change other tabs. Use `←`/`→` to select a node, `↑`/`↓` to select a profile, `s` to start, and `x` to stop. Updates and the last-update time appear in the selected profile details.
+
+- **Node monitor:** host uptime, load, memory, swap, and process-count summaries.
+- **Sockets monitor:** socket totals grouped by protocol, family, and state; process details are not displayed.
+- **PID monitor:** unavailable until the TUI provides a safe PID-selection flow; free-form PID input is intentionally disabled.
+
+The first update is expected after the 5-second interval. If none arrives within 15 seconds, the TUI stops the stream and reports that the task may be unsupported or disabled. Confirm OpenSnitch v1.8 compatibility, then check daemon task configuration and logs.
+
 ## 🔍 YARA scanning (optional)
 - **Build requirements:** cgo enabled + **libyara** installed (`brew install yara` · `apt-get install libyara-dev`). Uses `github.com/hillu/go-yara/v4`.
 - **Enable/disable:** set `yara_enabled: true|false` in config or toggle in **Settings → Security**. Default: `false`.
