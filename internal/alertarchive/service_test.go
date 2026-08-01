@@ -75,6 +75,7 @@ func TestExportRedactsEnvironmentAndSensitiveFields(t *testing.T) {
 			Checksums: map[string]string{"authorization": "checksum-secret"},
 		},
 	}
+
 	path, err := service.Export(context.Background(), alert)
 	if err != nil {
 		t.Fatalf("Export error: %v", err)
@@ -95,6 +96,31 @@ func TestExportRedactsEnvironmentAndSensitiveFields(t *testing.T) {
 	var decoded map[string]any
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
+	}
+}
+
+func TestExportPreservesCaseSensitiveRuleData(t *testing.T) {
+	service, _ := newTestService(t, DefaultLimits())
+	alert := state.Alert{
+		ID: "case-sensitive", PayloadKind: state.AlertPayloadRule,
+		Rule: &state.Rule{
+			Name: "case-sensitive-path",
+			Operator: state.RuleOperator{
+				Type: "simple", Operand: "process.path", Data: "/Opt/Case/Sensitive/App", Sensitive: true,
+			},
+		},
+	}
+
+	path, err := service.Export(context.Background(), alert)
+	if err != nil {
+		t.Fatalf("Export error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile error: %v", err)
+	}
+	if !strings.Contains(string(data), "/Opt/Case/Sensitive/App") {
+		t.Fatalf("case-sensitive rule data was redacted: %s", data)
 	}
 }
 

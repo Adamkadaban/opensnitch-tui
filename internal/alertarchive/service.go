@@ -284,7 +284,7 @@ func archiveOperator(operator state.RuleOperator, limits Limits, depth int, budg
 	}
 	*budget = *budget - 1
 	data := archiveText(operator.Data, limits)
-	if operator.Sensitive || alertsafety.SensitiveName(operator.Operand) {
+	if alertsafety.SensitiveName(operator.Operand) {
 		data = alertsafety.Redacted
 	}
 	archived := archivedOperator{
