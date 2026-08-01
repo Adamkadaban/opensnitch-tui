@@ -250,6 +250,135 @@ func TestStoreSetRulesCopiesData(t *testing.T) {
 	}
 }
 
+func TestStoreSystemFirewallsAreIsolatedAndDeepCopied(t *testing.T) {
+	store := NewStore()
+	first := testSystemFirewall("node-1", "rule-1")
+	second := testSystemFirewall("node-2", "rule-2")
+
+	store.SetSystemFirewall("node-1", first)
+	store.SetSystemFirewall("node-2", second)
+
+	first.SystemRules[0].Rule.Description = "mutated input"
+	first.SystemRules[0].Chains[0].Rules[0].Expressions[0].Statement.Values[0].Value = "mutated input"
+
+	selected, ok := store.SystemFirewall("node-1")
+	if !ok {
+		t.Fatal("expected node-1 firewall")
+	}
+	selected.SystemRules[0].Rule.Description = "mutated selector"
+	selected.SystemRules[0].Chains[0].Rules[0].Expressions[0].Statement.Values[0].Value = "mutated selector"
+
+	snapshot := store.Snapshot()
+	snapshot.SystemFirewalls["node-1"].SystemRules[0].Rule.Description = "mutated snapshot"
+	snapshot.SystemFirewalls["node-1"].SystemRules[0].Chains[0].Rules[0].Expressions[0].Statement.Values[0].Value = "mutated snapshot"
+
+	current := store.Snapshot()
+	nodeOne := current.SystemFirewalls["node-1"]
+	nodeTwo := current.SystemFirewalls["node-2"]
+	if nodeOne.SystemRules[0].Rule.Description != "rule-1" {
+		t.Fatalf("expected node-1 legacy rule to remain unchanged, got %q", nodeOne.SystemRules[0].Rule.Description)
+	}
+	if got := nodeOne.SystemRules[0].Chains[0].Rules[0].Expressions[0].Statement.Values[0].Value; got != "rule-1" {
+		t.Fatalf("expected node-1 nested value to remain unchanged, got %q", got)
+	}
+	if nodeTwo.SystemRules[0].Rule.Description != "rule-2" {
+		t.Fatalf("expected node-2 state to remain isolated, got %q", nodeTwo.SystemRules[0].Rule.Description)
+	}
+}
+
+func TestStoreUpdateSystemFirewall(t *testing.T) {
+	store := NewStore()
+	store.SetSystemFirewall("node-1", testSystemFirewall("wrong-node", "rule-1"))
+
+	if !store.UpdateSystemFirewall("node-1", func(firewall *SystemFirewall) {
+		firewall.NodeID = "mutated"
+		firewall.Running = false
+		firewall.SystemRules[0].Chains[0].Policy = "drop"
+	}) {
+		t.Fatal("expected firewall update to succeed")
+	}
+	updated, ok := store.SystemFirewall("node-1")
+	if !ok {
+		t.Fatal("expected updated firewall")
+	}
+	if updated.NodeID != "node-1" {
+		t.Fatalf("expected node ID to remain keyed to node-1, got %q", updated.NodeID)
+	}
+	if updated.Running {
+		t.Fatal("expected running state to be updated")
+	}
+	if updated.SystemRules[0].Chains[0].Policy != "drop" {
+		t.Fatalf("expected updated chain policy, got %q", updated.SystemRules[0].Chains[0].Policy)
+	}
+	if store.UpdateSystemFirewall("missing", func(_ *SystemFirewall) {}) {
+		t.Fatal("expected missing firewall update to fail")
+	}
+	if store.UpdateSystemFirewall("node-1", nil) {
+		t.Fatal("expected nil firewall update to fail")
+	}
+	if !store.RemoveSystemFirewall("node-1") {
+		t.Fatal("expected firewall removal to succeed")
+	}
+	if _, ok := store.SystemFirewall("node-1"); ok {
+		t.Fatal("expected firewall to be removed")
+	}
+	if store.RemoveSystemFirewall("node-1") {
+		t.Fatal("expected repeated firewall removal to fail")
+	}
+}
+
+func TestStoreSnapshotDeepCopiesEventData(t *testing.T) {
+	store := NewStore()
+	store.SetStats(Stats{Events: []Event{{
+		Connection: Connection{
+			ProcessArgs:      []string{"--flag"},
+			ProcessChecksums: map[string]string{"sha256": "sum"},
+		},
+		Rule: Rule{Operator: RuleOperator{Children: []RuleOperator{{Data: "child"}}}},
+	}}})
+
+	snapshot := store.Snapshot()
+	snapshot.Stats.Events[0].Connection.ProcessArgs[0] = "mutated"
+	snapshot.Stats.Events[0].Connection.ProcessChecksums["sha256"] = "mutated"
+	snapshot.Stats.Events[0].Rule.Operator.Children[0].Data = "mutated"
+
+	current := store.Snapshot().Stats.Events[0]
+	if current.Connection.ProcessArgs[0] != "--flag" {
+		t.Fatalf("expected event args to remain isolated, got %q", current.Connection.ProcessArgs[0])
+	}
+	if current.Connection.ProcessChecksums["sha256"] != "sum" {
+		t.Fatalf("expected event checksums to remain isolated, got %q", current.Connection.ProcessChecksums["sha256"])
+	}
+	if current.Rule.Operator.Children[0].Data != "child" {
+		t.Fatalf("expected event rule operator to remain isolated, got %q", current.Rule.Operator.Children[0].Data)
+	}
+}
+
+func testSystemFirewall(nodeID, marker string) SystemFirewall {
+	return SystemFirewall{
+		NodeID:  nodeID,
+		Enabled: true,
+		Running: true,
+		Version: 2,
+		SystemRules: []FirewallRuleGroup{{
+			Rule: &FirewallRule{Description: marker},
+			Chains: []FirewallChain{{
+				Name:   "output",
+				Table:  "opensnitch",
+				Policy: "accept",
+				Rules: []FirewallRule{{
+					UUID: marker,
+					Expressions: []FirewallExpression{{
+						Statement: &FirewallStatement{
+							Values: []FirewallStatementValue{{Key: "value", Value: marker}},
+						},
+					}},
+				}},
+			}},
+		}},
+	}
+}
+
 func TestStoreAddRuleUpdatesStats(t *testing.T) {
 	store := NewStore()
 	store.SetStats(Stats{NodeID: "node-1"})

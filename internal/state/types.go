@@ -115,6 +115,65 @@ type RuleOperator struct {
 	Children  []RuleOperator
 }
 
+// SystemFirewall is the firewall state reported by one daemon node.
+type SystemFirewall struct {
+	NodeID      string
+	Enabled     bool
+	Running     bool
+	Version     uint32
+	SystemRules []FirewallRuleGroup
+}
+
+// FirewallRuleGroup preserves one protocol FwChains entry.
+type FirewallRuleGroup struct {
+	Rule   *FirewallRule
+	Chains []FirewallChain
+}
+
+// FirewallChain describes a system firewall chain and its rules.
+type FirewallChain struct {
+	Name     string
+	Table    string
+	Family   string
+	Priority string
+	Type     string
+	Hook     string
+	Policy   string
+	Rules    []FirewallRule
+}
+
+// FirewallRule describes one system firewall rule.
+type FirewallRule struct {
+	Table            string
+	Chain            string
+	UUID             string
+	Enabled          bool
+	Position         uint64
+	Description      string
+	Parameters       string
+	Expressions      []FirewallExpression
+	Target           string
+	TargetParameters string
+}
+
+// FirewallExpression preserves an optional protocol expression statement.
+type FirewallExpression struct {
+	Statement *FirewallStatement
+}
+
+// FirewallStatement describes a firewall expression operation.
+type FirewallStatement struct {
+	Op     string
+	Name   string
+	Values []FirewallStatementValue
+}
+
+// FirewallStatementValue stores a statement key/value pair.
+type FirewallStatementValue struct {
+	Key   string
+	Value string
+}
+
 // Settings captures user preferences affecting UI behavior.
 type Settings struct {
 	ThemeName             string
@@ -158,13 +217,14 @@ type Prompt struct {
 
 // Snapshot is a threadsafe copy of the application's state tree.
 type Snapshot struct {
-	ActiveView  ViewKind
-	Nodes       []Node
-	Stats       Stats
-	Alerts      []Alert
-	Rules       map[string][]Rule
-	Settings    Settings
-	Prompts     []Prompt
-	LastError   string
-	LastErrorAt time.Time
+	ActiveView      ViewKind
+	Nodes           []Node
+	Stats           Stats
+	Alerts          []Alert
+	Rules           map[string][]Rule
+	SystemFirewalls map[string]SystemFirewall
+	Settings        Settings
+	Prompts         []Prompt
+	LastError       string
+	LastErrorAt     time.Time
 }
