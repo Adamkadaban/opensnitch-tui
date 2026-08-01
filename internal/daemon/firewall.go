@@ -10,7 +10,7 @@ import (
 
 // EnableFirewall starts and enables the system firewall after daemon acknowledgement.
 func (s *Server) EnableFirewall(ctx context.Context, nodeID string) error {
-	return s.updateFirewallState(ctx, nodeID, pb.Action_ENABLE_FIREWALL, func(firewall *state.SystemFirewall) {
+	return s.updateFirewallState(ctx, nodeID, func(firewall *state.SystemFirewall) {
 		firewall.Enabled = true
 		firewall.Running = true
 	})
@@ -18,7 +18,7 @@ func (s *Server) EnableFirewall(ctx context.Context, nodeID string) error {
 
 // DisableFirewall stops and disables the system firewall after daemon acknowledgement.
 func (s *Server) DisableFirewall(ctx context.Context, nodeID string) error {
-	return s.updateFirewallState(ctx, nodeID, pb.Action_DISABLE_FIREWALL, func(firewall *state.SystemFirewall) {
+	return s.updateFirewallState(ctx, nodeID, func(firewall *state.SystemFirewall) {
 		firewall.Enabled = false
 		firewall.Running = false
 	})
@@ -40,16 +40,20 @@ func (s *Server) ReloadFirewall(ctx context.Context, nodeID string) error {
 func (s *Server) updateFirewallState(
 	ctx context.Context,
 	nodeID string,
-	action pb.Action,
 	mutate func(*state.SystemFirewall),
 ) error {
-	if _, ok := s.store.SystemFirewall(nodeID); !ok {
+	firewall, ok := s.store.SystemFirewall(nodeID)
+	if !ok {
 		return fmt.Errorf("system firewall not found for %s", nodeID)
 	}
-	if _, err := s.SendNotification(ctx, nodeID, &pb.Notification{Type: action}); err != nil {
+	mutate(&firewall)
+	if _, err := s.SendNotification(ctx, nodeID, &pb.Notification{
+		Type:        pb.Action_RELOAD_FW_RULES,
+		SysFirewall: serializeSystemFirewall(firewall),
+	}); err != nil {
 		return err
 	}
-	s.store.UpdateSystemFirewall(nodeID, mutate)
+	s.store.SetSystemFirewall(nodeID, firewall)
 	return nil
 }
 

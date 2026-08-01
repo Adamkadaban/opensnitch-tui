@@ -17,7 +17,6 @@ func TestFirewallControlsSendActionsAndUpdateAfterAcknowledgement(t *testing.T) 
 	tests := []struct {
 		name        string
 		initial     state.SystemFirewall
-		action      pb.Action
 		call        func(context.Context, *Server, string) error
 		wantEnabled bool
 		wantRunning bool
@@ -25,7 +24,6 @@ func TestFirewallControlsSendActionsAndUpdateAfterAcknowledgement(t *testing.T) 
 		{
 			name:    "enable",
 			initial: testFirewallControlState(false, false),
-			action:  pb.Action_ENABLE_FIREWALL,
 			call: func(ctx context.Context, server *Server, nodeID string) error {
 				return server.EnableFirewall(ctx, nodeID)
 			},
@@ -35,7 +33,6 @@ func TestFirewallControlsSendActionsAndUpdateAfterAcknowledgement(t *testing.T) 
 		{
 			name:    "disable",
 			initial: testFirewallControlState(true, true),
-			action:  pb.Action_DISABLE_FIREWALL,
 			call: func(ctx context.Context, server *Server, nodeID string) error {
 				return server.DisableFirewall(ctx, nodeID)
 			},
@@ -59,11 +56,14 @@ func TestFirewallControlsSendActionsAndUpdateAfterAcknowledgement(t *testing.T) 
 			}()
 
 			sent := <-stream.sent
-			if sent.GetType() != tt.action {
-				t.Fatalf("expected action %s, got %s", tt.action, sent.GetType())
+			if sent.GetType() != pb.Action_RELOAD_FW_RULES {
+				t.Fatalf("expected reload action, got %s", sent.GetType())
 			}
-			if sent.GetSysFirewall() != nil {
-				t.Fatalf("expected no firewall payload for %s, got %s", tt.action, sent.GetSysFirewall())
+			expected := tt.initial
+			expected.Enabled = tt.wantEnabled
+			expected.Running = tt.wantRunning
+			if !proto.Equal(sent.GetSysFirewall(), serializeSystemFirewall(expected)) {
+				t.Fatalf("unexpected firewall payload: %s", sent.GetSysFirewall())
 			}
 			beforeReply, _ := server.store.SystemFirewall(stream.nodeID)
 			if diff := cmp.Diff(tt.initial, beforeReply); diff != "" {
