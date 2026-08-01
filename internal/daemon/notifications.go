@@ -248,18 +248,16 @@ func (sess *session) complete(reply *pb.NotificationReply) bool {
 }
 
 func (sess *session) enqueue(notification *pb.Notification) error {
-	if sess.done != nil {
-		select {
-		case <-sess.done:
-			return sess.closedError()
-		default:
-		}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.closeErr != nil {
+		return sess.closedErrorLocked()
 	}
 	select {
 	case sess.send <- notification:
 		return nil
 	default:
-		return fmt.Errorf("%w for %s", ErrNotificationQueueFull, sess.currentNodeID())
+		return fmt.Errorf("%w for %s", ErrNotificationQueueFull, sess.nodeID)
 	}
 }
 

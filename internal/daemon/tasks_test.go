@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
+	"github.com/adamkadaban/opensnitch-tui/internal/state"
 )
 
 func TestTaskStreamReceivesMultipleRepliesWithStartID(t *testing.T) {
@@ -211,6 +213,204 @@ func TestTaskReplyBackpressureFailsStream(t *testing.T) {
 	}
 }
 
+func TestTaskCallerCancellationStopsRemoteAndAllowsRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	request := controller.NewPIDMonitorTask(42, "5s")
+	srv, sess, task, start := startManualTask(ctx, t, request)
+
+	cancel()
+	waitForTaskDone(t, task)
+	stop := receiveTaskNotification(t, sess)
+	assertTaskStop(t, stop, start.GetData())
+	assertNoTaskNotification(t, sess)
+	if !errors.Is(task.Err(), context.Canceled) {
+		t.Fatalf("expected cancellation error, got %v", task.Err())
+	}
+
+	restarted, err := srv.StartTask(context.Background(), task.NodeID(), request)
+	if err != nil {
+		t.Fatalf("restart task: %v", err)
+	}
+	restart := receiveTaskNotification(t, sess)
+	if restart.GetType() != pb.Action_TASK_START {
+		t.Fatalf("expected restarted TASK_START, got %s", restart.GetType())
+	}
+	if err := srv.StopTask(context.Background(), restarted); err != nil {
+		t.Fatalf("stop restarted task: %v", err)
+	}
+	assertTaskStop(t, receiveTaskNotification(t, sess), restart.GetData())
+	if err := srv.StopTask(context.Background(), restarted); err != nil {
+		t.Fatalf("repeat stop restarted task: %v", err)
+	}
+	assertNoTaskNotification(t, sess)
+}
+
+func TestTaskDaemonErrorStopsRemoteWithOriginalPayload(t *testing.T) {
+	_, sess, task, start := startManualTask(
+		context.Background(),
+		t,
+		controller.NewNodeMonitorTask("node-1", "bad"),
+	)
+	reply := &pb.NotificationReply{
+		Id:   start.GetId(),
+		Code: pb.NotificationReplyCode_ERROR,
+		Data: "invalid interval",
+	}
+
+	if task.deliver(reply) {
+		t.Fatal("daemon error reply kept task registered")
+	}
+	waitForTaskDone(t, task)
+	assertTaskStop(t, receiveTaskNotification(t, sess), start.GetData())
+	assertNoTaskNotification(t, sess)
+	var replyErr *NotificationReplyError
+	if !errors.As(task.Err(), &replyErr) {
+		t.Fatalf("expected daemon reply error, got %v", task.Err())
+	}
+}
+
+func TestTaskReplyBackpressureStopsRemoteWithOriginalPayload(t *testing.T) {
+	_, sess, task, start := startManualTask(
+		context.Background(),
+		t,
+		controller.NewSocketsMonitorTask("1s", 1, 6, 2),
+	)
+	for index := range taskReplyBufferSize {
+		if !task.deliver(&pb.NotificationReply{
+			Id:   start.GetId(),
+			Data: fmt.Sprintf(`{"sequence":%d}`, index),
+		}) {
+			t.Fatalf("reply %d unexpectedly ended task", index)
+		}
+	}
+
+	if task.deliver(&pb.NotificationReply{Id: start.GetId(), Data: `{"overflow":true}`}) {
+		t.Fatal("backpressured reply kept task registered")
+	}
+	waitForTaskDone(t, task)
+	assertTaskStop(t, receiveTaskNotification(t, sess), start.GetData())
+	assertNoTaskNotification(t, sess)
+	if !errors.Is(task.Err(), ErrTaskReplyBackpressure) {
+		t.Fatalf("expected backpressure error, got %v", task.Err())
+	}
+}
+
+func TestTaskTerminalRacesEmitOneStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	srv, sess, task, start := startManualTask(
+		ctx,
+		t,
+		controller.NewSocketsMonitorTask("1s", 1, 6, 2),
+	)
+	for index := range taskReplyBufferSize {
+		if !task.deliver(&pb.NotificationReply{Id: start.GetId(), Data: `{}`}) {
+			t.Fatalf("reply %d unexpectedly ended task", index)
+		}
+	}
+
+	begin := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		<-begin
+		cancel()
+	}()
+	go func() {
+		defer wg.Done()
+		<-begin
+		task.deliver(&pb.NotificationReply{
+			Id:   start.GetId(),
+			Code: pb.NotificationReplyCode_ERROR,
+			Data: "failed",
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		<-begin
+		task.deliver(&pb.NotificationReply{Id: start.GetId(), Data: `{"overflow":true}`})
+	}()
+	go func() {
+		defer wg.Done()
+		<-begin
+		_ = srv.StopTask(context.Background(), task)
+	}()
+	close(begin)
+	wg.Wait()
+
+	waitForTaskDone(t, task)
+	assertTaskStop(t, receiveTaskNotification(t, sess), start.GetData())
+	assertNoTaskNotification(t, sess)
+}
+
+func TestTaskDisconnectSuppressesStopAndReportsDisconnect(t *testing.T) {
+	srv, sess, task, _ := startManualTask(
+		context.Background(),
+		t,
+		controller.NewNodeMonitorTask("node-1", "5s"),
+	)
+
+	sess.close(context.Canceled)
+	waitForTaskDone(t, task)
+	assertNoTaskNotification(t, sess)
+	if !errors.Is(task.Err(), ErrNotificationSessionClosed) {
+		t.Fatalf("expected session closed error, got %v", task.Err())
+	}
+	if err := srv.StopTask(context.Background(), task); !errors.Is(err, ErrNotificationSessionClosed) {
+		t.Fatalf("expected StopTask to report closed session, got %v", err)
+	}
+	assertNoTaskNotification(t, sess)
+}
+
+func TestTaskServerShutdownSuppressesStopAndReportsShutdown(t *testing.T) {
+	srv, sess, task, _ := startManualTask(
+		context.Background(),
+		t,
+		controller.NewNodeMonitorTask("node-1", "5s"),
+	)
+
+	srv.closeSessions(context.Canceled)
+	waitForTaskDone(t, task)
+	assertNoTaskNotification(t, sess)
+	if !errors.Is(task.Err(), ErrNotificationSessionClosed) {
+		t.Fatalf("expected session closed error, got %v", task.Err())
+	}
+	if err := srv.StopTask(context.Background(), task); !errors.Is(err, ErrNotificationSessionClosed) {
+		t.Fatalf("expected StopTask to report server shutdown, got %v", err)
+	}
+	assertNoTaskNotification(t, sess)
+}
+
+func TestTaskAutomaticStopFailurePreservesTerminalError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	srv, sess, task, _ := startManualTask(
+		ctx,
+		t,
+		controller.NewNodeMonitorTask("node-1", "5s"),
+	)
+	for range notificationQueueSize {
+		sess.send <- &pb.Notification{Type: pb.Action_CHANGE_CONFIG}
+	}
+
+	cancel()
+	waitForTaskDone(t, task)
+	if !errors.Is(task.Err(), context.Canceled) {
+		t.Fatalf("expected cancellation to remain primary, got %v", task.Err())
+	}
+	if !errors.Is(task.Err(), ErrNotificationQueueFull) {
+		t.Fatalf("expected stop enqueue failure to be exposed, got %v", task.Err())
+	}
+	if err := srv.StopTask(context.Background(), task); !errors.Is(err, ErrNotificationQueueFull) {
+		t.Fatalf("expected exactly-once stop failure, got %v", err)
+	}
+	for range notificationQueueSize {
+		if notification := <-sess.send; notification.GetType() == pb.Action_TASK_STOP {
+			t.Fatalf("unexpected TASK_STOP after failed exactly-once enqueue: %+v", notification)
+		}
+	}
+	assertNoTaskNotification(t, sess)
+}
+
 func TestTaskNotificationPayloads(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -325,6 +525,57 @@ func pendingNotificationCount(stream controller.TaskStream) int {
 	task.session.mu.Lock()
 	defer task.session.mu.Unlock()
 	return len(task.session.pending)
+}
+
+func startManualTask(
+	ctx context.Context,
+	t *testing.T,
+	request controller.TaskRequest,
+) (*Server, *session, *taskStream, *pb.Notification) {
+	t.Helper()
+	const nodeID = "node-1"
+	srv := New(state.NewStore(), Options{})
+	sess := newNotificationSession(nodeID)
+	srv.sessions[nodeID] = sess
+	stream, err := srv.StartTask(ctx, nodeID, request)
+	if err != nil {
+		t.Fatalf("StartTask returned error: %v", err)
+	}
+	start := receiveTaskNotification(t, sess)
+	if start.GetType() != pb.Action_TASK_START {
+		t.Fatalf("expected TASK_START, got %s", start.GetType())
+	}
+	return srv, sess, stream.(*taskStream), start
+}
+
+func receiveTaskNotification(t *testing.T, sess *session) *pb.Notification {
+	t.Helper()
+	select {
+	case notification := <-sess.send:
+		return notification
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task notification")
+		return nil
+	}
+}
+
+func assertTaskStop(t *testing.T, notification *pb.Notification, payload string) {
+	t.Helper()
+	if notification.GetType() != pb.Action_TASK_STOP {
+		t.Fatalf("expected TASK_STOP, got %s", notification.GetType())
+	}
+	if notification.GetData() != payload {
+		t.Fatalf("expected stop payload %s, got %s", payload, notification.GetData())
+	}
+}
+
+func assertNoTaskNotification(t *testing.T, sess *session) {
+	t.Helper()
+	select {
+	case notification := <-sess.send:
+		t.Fatalf("unexpected task notification: %+v", notification)
+	default:
+	}
 }
 
 func assertJSONEqual(t *testing.T, got, want string) {

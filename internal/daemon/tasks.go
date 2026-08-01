@@ -30,10 +30,13 @@ type taskStream struct {
 	updates chan controller.TaskUpdate
 	done    chan struct{}
 
-	mu         sync.Mutex
-	err        error
-	closed     bool
-	stopCancel func() bool
+	mu          sync.Mutex
+	err         error
+	stopErr     error
+	closed      bool
+	terminating bool
+	stopCancel  func() bool
+	stopDone    chan struct{}
 }
 
 var _ controller.TaskManager = (*Server)(nil)
@@ -68,19 +71,20 @@ func (s *Server) StartTask(
 	}
 
 	task := &taskStream{
-		server:  s,
-		session: sess,
-		id:      s.nextNotificationID(),
-		nodeID:  nodeID,
-		name:    request.Name,
-		payload: string(payload),
-		updates: make(chan controller.TaskUpdate, taskReplyBufferSize),
-		done:    make(chan struct{}),
+		server:   s,
+		session:  sess,
+		id:       s.nextNotificationID(),
+		nodeID:   nodeID,
+		name:     request.Name,
+		payload:  string(payload),
+		updates:  make(chan controller.TaskUpdate, taskReplyBufferSize),
+		done:     make(chan struct{}),
+		stopDone: make(chan struct{}),
 	}
 	task.pending = &pendingNotification{
 		deliver: task.deliver,
 		close: func(error) {
-			task.finish(sess.closedError())
+			_ = task.terminate(sess.closedError(), false)
 		},
 		migrate: task.migrateNodeID,
 	}
@@ -101,10 +105,8 @@ func (s *Server) StartTask(
 		return nil, err
 	}
 	s.sessionsMu.RUnlock()
-
 	task.setCancelWatch(context.AfterFunc(ctx, func() {
-		task.unregister()
-		task.finish(ctx.Err())
+		_ = task.terminate(ctx.Err(), true)
 	}))
 	return task, nil
 }
@@ -119,14 +121,8 @@ func (s *Server) StopTask(ctx context.Context, stream controller.TaskStream) err
 		return err
 	}
 
-	task.unregister()
-	nodeID := task.NodeID()
-	notification := s.newNotification(pb.Action_TASK_STOP, nodeID)
-	notification.Data = task.payload
 	// OpenSnitch v1.8 does not send a reply for TASK_STOP.
-	err := s.sendNotification(nodeID, notification)
-	task.finish(err)
-	return err
+	return task.terminate(nil, true)
 }
 
 func validTaskName(name controller.TaskName) bool {
@@ -173,20 +169,15 @@ func (t *taskStream) Err() error {
 }
 
 func (t *taskStream) deliver(reply *pb.NotificationReply) bool {
-	var stopCancel func() bool
-
 	t.mu.Lock()
-	if t.closed {
+	if t.closed || t.terminating {
 		t.mu.Unlock()
 		return false
 	}
 	if reply.GetCode() == pb.NotificationReplyCode_ERROR {
-		t.unregister()
-		stopCancel = t.finishLocked(&NotificationReplyError{NodeID: t.nodeID, Reply: reply})
+		err := &NotificationReplyError{NodeID: t.nodeID, Reply: reply}
 		t.mu.Unlock()
-		if stopCancel != nil {
-			stopCancel()
-		}
+		_ = t.terminate(err, true)
 		return false
 	}
 
@@ -196,12 +187,9 @@ func (t *taskStream) deliver(reply *pb.NotificationReply) bool {
 		t.mu.Unlock()
 		return true
 	default:
-		t.unregister()
-		stopCancel = t.finishLocked(fmt.Errorf("%w for %s", ErrTaskReplyBackpressure, t.name))
+		err := fmt.Errorf("%w for %s", ErrTaskReplyBackpressure, t.name)
 		t.mu.Unlock()
-		if stopCancel != nil {
-			stopCancel()
-		}
+		_ = t.terminate(err, true)
 		return false
 	}
 }
@@ -210,31 +198,74 @@ func (t *taskStream) unregister() {
 	t.session.removePendingNotification(t.id, t.pending)
 }
 
-func (t *taskStream) finish(err error) {
+func (t *taskStream) terminate(err error, emitStop bool) error {
 	t.mu.Lock()
-	stopCancel := t.finishLocked(err)
+	if t.closed || t.terminating {
+		stopDone := t.stopDone
+		t.mu.Unlock()
+		<-stopDone
+		<-t.done
+		t.mu.Lock()
+		stopErr := t.stopErr
+		t.mu.Unlock()
+		return stopErr
+	}
+	t.terminating = true
+	if !emitStop {
+		t.stopErr = err
+		close(t.stopDone)
+	}
+	stopCancel := t.stopCancel
+	t.stopCancel = nil
+	t.mu.Unlock()
+
+	t.unregister()
+	if emitStop {
+		stopErr := t.enqueueStop()
+		t.mu.Lock()
+		t.stopErr = stopErr
+		close(t.stopDone)
+		t.mu.Unlock()
+		if err != nil && stopErr != nil {
+			err = errors.Join(err, fmt.Errorf("stop task: %w", stopErr))
+		} else if err == nil {
+			err = stopErr
+		}
+	}
+
+	t.mu.Lock()
+	t.err = err
+	t.closed = true
+	close(t.updates)
+	close(t.done)
 	t.mu.Unlock()
 	if stopCancel != nil {
 		stopCancel()
 	}
+	t.mu.Lock()
+	stopErr := t.stopErr
+	t.mu.Unlock()
+	return stopErr
 }
 
-func (t *taskStream) finishLocked(err error) func() bool {
-	if t.closed {
-		return nil
+func (t *taskStream) enqueueStop() error {
+	t.server.sessionsMu.RLock()
+	defer t.server.sessionsMu.RUnlock()
+	nodeID := t.session.currentNodeID()
+	if t.server.sessionsClosed {
+		return fmt.Errorf("%w for %s", ErrNotificationSessionClosed, nodeID)
 	}
-	t.closed = true
-	t.err = err
-	close(t.updates)
-	close(t.done)
-	stopCancel := t.stopCancel
-	t.stopCancel = nil
-	return stopCancel
+	if t.server.sessions[nodeID] != t.session {
+		return fmt.Errorf("%w: %s", ErrNotificationNodeDisconnected, nodeID)
+	}
+	notification := t.server.newNotification(pb.Action_TASK_STOP, nodeID)
+	notification.Data = t.payload
+	return t.session.enqueue(notification)
 }
 
 func (t *taskStream) setCancelWatch(stop func() bool) {
 	t.mu.Lock()
-	if t.closed {
+	if t.closed || t.terminating {
 		t.mu.Unlock()
 		stop()
 		return
