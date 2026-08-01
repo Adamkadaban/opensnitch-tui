@@ -72,13 +72,14 @@ func Run(ctx context.Context, opts Options) error {
 	settingsMgr := settings.NewManager(configPath, cfg)
 
 	rootModel := root.New(store, root.Options{
-		Theme:    palette,
-		KeyMap:   &km,
-		Rules:    daemonSrv,
-		Firewall: daemonSrv,
-		Tasks:    daemonSrv,
-		Prompts:  daemonSrv,
-		Settings: settingsMgr,
+		Theme:      palette,
+		KeyMap:     &km,
+		Rules:      daemonSrv,
+		Firewall:   daemonSrv,
+		Tasks:      daemonSrv,
+		NodeConfig: daemonSrv,
+		Prompts:    daemonSrv,
+		Settings:   settingsMgr,
 	})
 
 	prog := tea.NewProgram(rootModel, tea.WithAltScreen())

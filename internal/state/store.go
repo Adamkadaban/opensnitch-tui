@@ -39,6 +39,7 @@ func NewStore() *Store {
 			Nodes:           []Node{},
 			Rules:           make(map[string][]Rule),
 			SystemFirewalls: make(map[string]SystemFirewall),
+			NodeConfigs:     make(map[string]NodeConfigState),
 			Settings: Settings{
 				ThemeName:             config.DefaultThemeName,
 				DefaultPromptAction:   config.DefaultPromptAction,
@@ -66,10 +67,35 @@ func (s *Store) Snapshot() Snapshot {
 	copySnap.Alerts = cloneAlerts(s.snapshot.Alerts)
 	copySnap.Rules = cloneRulesMap(s.snapshot.Rules)
 	copySnap.SystemFirewalls = cloneFirewallsMap(s.snapshot.SystemFirewalls)
+	copySnap.NodeConfigs = cloneNodeConfigsMap(s.snapshot.NodeConfigs)
 	copySnap.Settings = s.snapshot.Settings
 	copySnap.Stats = cloneStats(s.snapshot.Stats)
 	copySnap.Prompts = clonePrompts(s.snapshot.Prompts)
 	return copySnap
+}
+
+// SetNodeConfig replaces the preserved daemon configuration for one node.
+func (s *Store) SetNodeConfig(nodeID string, config NodeConfigState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.snapshot.NodeConfigs == nil {
+		s.snapshot.NodeConfigs = make(map[string]NodeConfigState)
+	}
+	s.snapshot.NodeConfigs[nodeID] = cloneNodeConfigState(config)
+	s.notifyLocked()
+}
+
+// NodeConfig returns a copy of one node's preserved daemon configuration.
+func (s *Store) NodeConfig(nodeID string) (NodeConfigState, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	config, ok := s.snapshot.NodeConfigs[nodeID]
+	if !ok {
+		return NodeConfigState{}, false
+	}
+	return cloneNodeConfigState(config), true
 }
 
 // SetNodes replaces the tracked daemon node list.
@@ -536,6 +562,21 @@ func cloneFirewallsMap(firewalls map[string]SystemFirewall) map[string]SystemFir
 		copyMap[nodeID] = cloneSystemFirewall(firewall)
 	}
 	return copyMap
+}
+
+func cloneNodeConfigsMap(configs map[string]NodeConfigState) map[string]NodeConfigState {
+	if len(configs) == 0 {
+		return nil
+	}
+	copyMap := make(map[string]NodeConfigState, len(configs))
+	for nodeID, config := range configs {
+		copyMap[nodeID] = cloneNodeConfigState(config)
+	}
+	return copyMap
+}
+
+func cloneNodeConfigState(config NodeConfigState) NodeConfigState {
+	return config
 }
 
 func cloneSystemFirewall(firewall SystemFirewall) SystemFirewall {
