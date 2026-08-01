@@ -1,0 +1,62 @@
+version: 2
+
+project_name: opensnitch-tui
+
+before:
+  hooks:
+    - go mod verify
+    - go test ./...
+
+builds:
+  - id: linux-amd64-yara
+    main: ./cmd/opensnitch-tui
+    binary: opensnitch-tui
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+
+  - id: linux-arm64-portable
+    main: ./cmd/opensnitch-tui
+    binary: opensnitch-tui
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - no_yara
+    goos:
+      - linux
+    goarch:
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: release
+    formats:
+      - tar.gz
+    name_template: '{{ .ProjectName }}_{{ .Version }}_linux_{{ if eq .Arch "amd64" }}x86_64_yara{{ else }}{{ .Arch }}_portable{{ end }}'
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - "^Merge "
+
+release:
+  draft: false
+  prerelease: auto
+  name_template: "{{ .Tag }}"
