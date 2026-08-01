@@ -59,3 +59,13 @@ func TestViewFitsWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestNewIncludesFirewallView(t *testing.T) {
+	model := New(state.NewStore(), Options{Theme: theme.New(theme.Options{})})
+	if model.views[state.ViewFirewall] == nil {
+		t.Fatal("expected firewall view to be registered")
+	}
+	if indexOf(model.order, state.ViewFirewall) == 0 {
+		t.Fatal("expected firewall view in routed view order")
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/alerts"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/dashboard"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/events"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/firewall"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/nodes"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/rules"
 	settingsview "github.com/adamkadaban/opensnitch-tui/internal/ui/views/settings"
@@ -28,6 +29,7 @@ type Options struct {
 	Theme    theme.Theme
 	KeyMap   *keymap.Global
 	Rules    controller.RuleManager
+	Firewall controller.FirewallManager
 	Prompts  controller.PromptManager
 	Settings controller.SettingsManager
 }
@@ -61,6 +63,7 @@ func New(store *state.Store, opts Options) *Model {
 		state.ViewAlerts:    alerts.New(store, opts.Theme),
 		state.ViewEvents:    events.New(store, opts.Theme),
 		state.ViewRules:     rules.New(store, opts.Theme, opts.Rules),
+		state.ViewFirewall:  firewall.New(store, opts.Theme, opts.Firewall),
 		state.ViewNodes:     nodes.New(store, opts.Theme),
 		state.ViewSettings:  settingsview.New(store, opts.Theme, opts.Settings),
 	}

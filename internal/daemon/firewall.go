@@ -1,9 +1,61 @@
 package daemon
 
 import (
+	"context"
+	"fmt"
+
 	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 )
+
+// EnableFirewall starts and enables the system firewall after daemon acknowledgement.
+func (s *Server) EnableFirewall(ctx context.Context, nodeID string) error {
+	return s.updateFirewallState(ctx, nodeID, func(firewall *state.SystemFirewall) {
+		firewall.Enabled = true
+		firewall.Running = true
+	})
+}
+
+// DisableFirewall stops and disables the system firewall after daemon acknowledgement.
+func (s *Server) DisableFirewall(ctx context.Context, nodeID string) error {
+	return s.updateFirewallState(ctx, nodeID, func(firewall *state.SystemFirewall) {
+		firewall.Enabled = false
+		firewall.Running = false
+	})
+}
+
+// ReloadFirewall sends the selected node's normalized firewall definition to the daemon.
+func (s *Server) ReloadFirewall(ctx context.Context, nodeID string) error {
+	firewall, ok := s.store.SystemFirewall(nodeID)
+	if !ok {
+		return fmt.Errorf("system firewall not found for %s", nodeID)
+	}
+	_, err := s.SendNotification(ctx, nodeID, &pb.Notification{
+		Type:        pb.Action_RELOAD_FW_RULES,
+		SysFirewall: serializeSystemFirewall(firewall),
+	})
+	return err
+}
+
+func (s *Server) updateFirewallState(
+	ctx context.Context,
+	nodeID string,
+	mutate func(*state.SystemFirewall),
+) error {
+	firewall, ok := s.store.SystemFirewall(nodeID)
+	if !ok {
+		return fmt.Errorf("system firewall not found for %s", nodeID)
+	}
+	mutate(&firewall)
+	if _, err := s.SendNotification(ctx, nodeID, &pb.Notification{
+		Type:        pb.Action_RELOAD_FW_RULES,
+		SysFirewall: serializeSystemFirewall(firewall),
+	}); err != nil {
+		return err
+	}
+	s.store.SetSystemFirewall(nodeID, firewall)
+	return nil
+}
 
 func convertSystemFirewall(firewall *pb.SysFirewall, nodeID string, running bool) (state.SystemFirewall, bool) {
 	if firewall == nil {
@@ -23,6 +75,101 @@ func convertSystemFirewall(firewall *pb.SysFirewall, nodeID string, running bool
 		converted.SystemRules[i] = convertFirewallRuleGroup(group)
 	}
 	return converted, true
+}
+
+func serializeSystemFirewall(firewall state.SystemFirewall) *pb.SysFirewall {
+	converted := &pb.SysFirewall{
+		Enabled: firewall.Enabled,
+		Version: firewall.Version,
+	}
+	if len(firewall.SystemRules) == 0 {
+		return converted
+	}
+	converted.SystemRules = make([]*pb.FwChains, len(firewall.SystemRules))
+	for i, group := range firewall.SystemRules {
+		converted.SystemRules[i] = serializeFirewallRuleGroup(group)
+	}
+	return converted
+}
+
+func serializeFirewallRuleGroup(group state.FirewallRuleGroup) *pb.FwChains {
+	converted := &pb.FwChains{}
+	if group.Rule != nil {
+		converted.Rule = serializeFirewallRule(*group.Rule)
+	}
+	if len(group.Chains) == 0 {
+		return converted
+	}
+	converted.Chains = make([]*pb.FwChain, len(group.Chains))
+	for i, chain := range group.Chains {
+		converted.Chains[i] = serializeFirewallChain(chain)
+	}
+	return converted
+}
+
+func serializeFirewallChain(chain state.FirewallChain) *pb.FwChain {
+	converted := &pb.FwChain{
+		Name:     chain.Name,
+		Table:    chain.Table,
+		Family:   chain.Family,
+		Priority: chain.Priority,
+		Type:     chain.Type,
+		Hook:     chain.Hook,
+		Policy:   chain.Policy,
+	}
+	if len(chain.Rules) == 0 {
+		return converted
+	}
+	converted.Rules = make([]*pb.FwRule, len(chain.Rules))
+	for i, rule := range chain.Rules {
+		converted.Rules[i] = serializeFirewallRule(rule)
+	}
+	return converted
+}
+
+func serializeFirewallRule(rule state.FirewallRule) *pb.FwRule {
+	converted := &pb.FwRule{
+		Table:            rule.Table,
+		Chain:            rule.Chain,
+		UUID:             rule.UUID,
+		Enabled:          rule.Enabled,
+		Position:         rule.Position,
+		Description:      rule.Description,
+		Parameters:       rule.Parameters,
+		Target:           rule.Target,
+		TargetParameters: rule.TargetParameters,
+	}
+	if len(rule.Expressions) == 0 {
+		return converted
+	}
+	converted.Expressions = make([]*pb.Expressions, len(rule.Expressions))
+	for i, expression := range rule.Expressions {
+		converted.Expressions[i] = serializeFirewallExpression(expression)
+	}
+	return converted
+}
+
+func serializeFirewallExpression(expression state.FirewallExpression) *pb.Expressions {
+	converted := &pb.Expressions{}
+	if expression.Statement == nil {
+		return converted
+	}
+	statement := expression.Statement
+	converted.Statement = &pb.Statement{
+		Op:   statement.Op,
+		Name: statement.Name,
+	}
+	if len(statement.Values) == 0 {
+		return converted
+	}
+	converted.Statement.Values = make([]*pb.StatementValues, len(statement.Values))
+	for i, value := range statement.Values {
+		converted.Statement.Values[i] = &pb.StatementValues{
+			Key:   value.Key,
+			Value: value.Value,
+		}
+	}
+	return converted
 }
 
 func convertFirewallRuleGroup(group *pb.FwChains) state.FirewallRuleGroup {

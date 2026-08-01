@@ -75,6 +75,7 @@ func Run(ctx context.Context, opts Options) error {
 		Theme:    palette,
 		KeyMap:   &km,
 		Rules:    daemonSrv,
+		Firewall: daemonSrv,
 		Prompts:  daemonSrv,
 		Settings: settingsMgr,
 	})
