@@ -1,12 +1,14 @@
 package rules
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
@@ -18,6 +20,7 @@ type fakeRuleController struct {
 	nodeID   string
 	ruleName string
 	rule     state.Rule
+	rules    []state.Rule
 	err      error
 }
 
@@ -50,7 +53,44 @@ func (f *fakeRuleController) ChangeRule(nodeID string, rule state.Rule) error {
 	return f.err
 }
 
+func (f *fakeRuleController) ApplyRules(_ context.Context, nodeID string, rules []state.Rule) error {
+	f.action = "apply"
+	f.nodeID = nodeID
+	f.rules = append([]state.Rule(nil), rules...)
+	if len(rules) > 0 {
+		f.ruleName = rules[0].Name
+		f.rule = rules[0]
+	}
+	return f.err
+}
+
 var _ controller.RuleManager = (*fakeRuleController)(nil)
+var _ controller.RuleBatchManager = (*fakeRuleController)(nil)
+
+type fakeRuleArchive struct {
+	path          string
+	imported      []state.Rule
+	importErr     error
+	exportErr     error
+	exportedNode  state.Node
+	exportedRules []state.Rule
+}
+
+func (f *fakeRuleArchive) Directory(state.Node) string {
+	return f.path
+}
+
+func (f *fakeRuleArchive) Export(_ context.Context, node state.Node, rules []state.Rule) (string, error) {
+	f.exportedNode = node
+	f.exportedRules = append([]state.Rule(nil), rules...)
+	return f.path, f.exportErr
+}
+
+func (f *fakeRuleArchive) Import(_ context.Context, _ state.Node) ([]state.Rule, string, error) {
+	return append([]state.Rule(nil), f.imported...), f.path, f.importErr
+}
+
+var _ controller.RuleArchive = (*fakeRuleArchive)(nil)
 
 func TestRulesViewEmpty(t *testing.T) {
 	store := state.NewStore()
@@ -142,6 +182,144 @@ func TestRulesModifyNavigateFieldsWithArrows(t *testing.T) {
 	}
 }
 
+func TestRulesCopyRunsAsynchronouslyWithAvailableName(t *testing.T) {
+	store := state.NewStore()
+	node := state.Node{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady}
+	store.SetNodes([]state.Node{node})
+	store.SetRules(node.ID, []state.Rule{
+		{Name: "curl", Action: "allow", Duration: "always", CreatedAt: time.Now(), UpdatedAt: time.Now(), Operator: state.RuleOperator{Type: "simple"}},
+		{Name: "curl-copy-1", Action: "allow", Duration: "always", Operator: state.RuleOperator{Type: "simple"}},
+	})
+	ctrl := &fakeRuleController{}
+	view := New(store, theme.New(theme.Options{}), ctrl)
+	view.SetSize(80, 40)
+
+	_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd == nil {
+		t.Fatal("expected asynchronous copy command")
+	}
+	if out := view.View(); !strings.Contains(out, "Copying curl as curl-copy-2") {
+		t.Fatalf("expected copy in-progress feedback, got %q", out)
+	}
+	msg := cmd()
+	view.Update(msg)
+	if ctrl.action != "apply" || ctrl.ruleName != "curl-copy-2" {
+		t.Fatalf("unexpected batch copy request: %+v", ctrl)
+	}
+	if !ctrl.rule.CreatedAt.IsZero() {
+		t.Fatalf("expected copied rule creation timestamp to be cleared, got %s", ctrl.rule.CreatedAt)
+	}
+	if !ctrl.rule.UpdatedAt.IsZero() {
+		t.Fatalf("expected copied rule update timestamp to be cleared, got %s", ctrl.rule.UpdatedAt)
+	}
+	if out := view.View(); !strings.Contains(out, "Copied rule as curl-copy-2") {
+		t.Fatalf("expected copy success feedback, got %q", out)
+	}
+}
+
+func TestRulesImportAndExportRunAsynchronously(t *testing.T) {
+	store := state.NewStore()
+	node := state.Node{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady}
+	store.SetNodes([]state.Node{node})
+	store.SetRules(node.ID, []state.Rule{{
+		Name: "current", Action: "allow", Duration: "always", Operator: state.RuleOperator{Type: "simple"},
+	}})
+	ctrl := &fakeRuleController{}
+	archive := &fakeRuleArchive{
+		path: "/safe/archive/alpha-1234",
+		imported: []state.Rule{{
+			Name: "imported", Action: "deny", Duration: "always", Operator: state.RuleOperator{Type: "simple"},
+		}},
+	}
+	view := New(store, theme.New(theme.Options{}), ctrl, archive)
+	view.SetSize(120, 40)
+
+	_, importCmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if importCmd == nil || !strings.Contains(view.View(), archive.path) {
+		t.Fatalf("expected import command and resolved directory feedback, got %q", view.View())
+	}
+	view.Update(importCmd())
+	if len(ctrl.rules) != 1 || ctrl.rules[0].Name != "imported" {
+		t.Fatalf("unexpected imported batch: %+v", ctrl.rules)
+	}
+	if out := view.View(); !strings.Contains(out, "Imported 1 rule(s)") || !strings.Contains(out, archive.path) {
+		t.Fatalf("expected import success feedback, got %q", out)
+	}
+
+	_, exportCmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if exportCmd == nil {
+		t.Fatal("expected asynchronous export command")
+	}
+	view.Update(exportCmd())
+	if archive.exportedNode.ID != node.ID || len(archive.exportedRules) != 1 {
+		t.Fatalf("unexpected export request: node=%+v rules=%+v", archive.exportedNode, archive.exportedRules)
+	}
+	if out := view.View(); !strings.Contains(out, "Exported 1 rule(s)") || !strings.Contains(out, archive.path) {
+		t.Fatalf("expected export success feedback, got %q", out)
+	}
+}
+
+func TestRulesArchiveActionsRejectInvalidSelections(t *testing.T) {
+	t.Run("no node", func(t *testing.T) {
+		view := New(state.NewStore(), theme.New(theme.Options{}), &fakeRuleController{}, &fakeRuleArchive{path: "/safe/archive"})
+		_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+		if cmd != nil || !strings.Contains(view.View(), "No node selected") {
+			t.Fatalf("expected no-node rejection, got cmd=%v output=%q", cmd != nil, view.View())
+		}
+	})
+
+	t.Run("disconnected", func(t *testing.T) {
+		store := state.NewStore()
+		node := state.Node{ID: "node-1", Name: "alpha", Status: state.NodeStatusDisconnected}
+		store.SetNodes([]state.Node{node})
+		store.SetRules(node.ID, []state.Rule{{Name: "one"}})
+		view := New(store, theme.New(theme.Options{}), &fakeRuleController{}, &fakeRuleArchive{path: "/safe/archive"})
+		_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+		if cmd != nil || !strings.Contains(view.View(), "not connected") {
+			t.Fatalf("expected disconnected rejection, got cmd=%v output=%q", cmd != nil, view.View())
+		}
+	})
+
+	t.Run("no rules", func(t *testing.T) {
+		store := state.NewStore()
+		node := state.Node{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady}
+		store.SetNodes([]state.Node{node})
+		view := New(store, theme.New(theme.Options{}), &fakeRuleController{}, &fakeRuleArchive{path: "/safe/archive"})
+		for _, key := range []rune{'c', 'o'} {
+			_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+			if cmd != nil || !strings.Contains(view.View(), "No rules available") {
+				t.Fatalf("expected no-rules rejection for %q, got cmd=%v output=%q", key, cmd != nil, view.View())
+			}
+		}
+	})
+}
+
+func TestAvailableCopyName(t *testing.T) {
+	rules := []state.Rule{{Name: "base-copy-1"}, {Name: "base-copy-3"}, {Name: "base"}}
+	if got := availableCopyName("base", rules); got != "base-copy-2" {
+		t.Fatalf("availableCopyName = %q, want base-copy-2", got)
+	}
+}
+
+func TestRulesArchiveFeedbackFitsTerminalBounds(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{80, 40}, {120, 40}} {
+		store := state.NewStore()
+		node := state.Node{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady}
+		store.SetNodes([]state.Node{node})
+		store.SetRules(node.ID, makeTestRules(10))
+		archive := &fakeRuleArchive{path: "/home/user/.local/share/opensnitch-tui/rules/alpha-1234567890"}
+		view := New(store, theme.New(theme.Options{}), &fakeRuleController{}, archive)
+		view.SetSize(size.width, size.height)
+		view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+		output := view.View()
+		if got := lipgloss.Width(output); got > size.width {
+			t.Fatalf("%dx%d output width = %d", size.width, size.height, got)
+		}
+		if got := lipgloss.Height(output); got > size.height {
+			t.Fatalf("%dx%d output height = %d", size.width, size.height, got)
+		}
+	}
+}
 func TestRulesTableWindowing(t *testing.T) {
 	store := state.NewStore()
 	node := state.Node{ID: "node-1", Name: "alpha"}

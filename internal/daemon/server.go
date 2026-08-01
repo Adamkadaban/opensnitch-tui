@@ -452,6 +452,40 @@ func (s *Server) ChangeRule(nodeID string, rule state.Rule) error {
 	return nil
 }
 
+// ApplyRules sends one acknowledged CHANGE_RULE batch and updates state only after OK.
+func (s *Server) ApplyRules(ctx context.Context, nodeID string, rules []state.Rule) error {
+	if strings.TrimSpace(nodeID) == "" {
+		return errors.New("node id required")
+	}
+	if len(rules) == 0 {
+		return errors.New("at least one rule is required")
+	}
+	seen := make(map[string]struct{}, len(rules))
+	protoRules := make([]*pb.Rule, len(rules))
+	applied := make([]state.Rule, len(rules))
+	for i, rule := range rules {
+		if strings.TrimSpace(rule.Name) == "" {
+			return fmt.Errorf("rule %d name required", i+1)
+		}
+		if _, ok := seen[rule.Name]; ok {
+			return fmt.Errorf("duplicate rule name %q", rule.Name)
+		}
+		seen[rule.Name] = struct{}{}
+		rule.NodeID = nodeID
+		applied[i] = rule
+		protoRules[i] = serializeRule(rule)
+	}
+	notif := &pb.Notification{
+		Type:  pb.Action_CHANGE_RULE,
+		Rules: protoRules,
+	}
+	if _, err := s.SendNotification(ctx, nodeID, notif); err != nil {
+		return err
+	}
+	s.store.ApplyRules(nodeID, applied)
+	return nil
+}
+
 func (s *Server) enqueueRuleAction(nodeID, ruleName string, action pb.Action, mutate func(*state.Rule)) error {
 	rule, err := s.lookupRule(nodeID, ruleName)
 	if err != nil {

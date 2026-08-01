@@ -13,6 +13,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/config"
 	"github.com/adamkadaban/opensnitch-tui/internal/daemon"
 	"github.com/adamkadaban/opensnitch-tui/internal/keymap"
+	"github.com/adamkadaban/opensnitch-tui/internal/rulearchive"
 	"github.com/adamkadaban/opensnitch-tui/internal/settings"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 	"github.com/adamkadaban/opensnitch-tui/internal/theme"
@@ -70,16 +71,21 @@ func Run(ctx context.Context, opts Options) error {
 	})
 
 	settingsMgr := settings.NewManager(configPath, cfg)
+	ruleArchive, err := rulearchive.NewDefault()
+	if err != nil {
+		return fmt.Errorf("configure rule archive: %w", err)
+	}
 
 	rootModel := root.New(store, root.Options{
-		Theme:      palette,
-		KeyMap:     &km,
-		Rules:      daemonSrv,
-		Firewall:   daemonSrv,
-		Tasks:      daemonSrv,
-		NodeConfig: daemonSrv,
-		Prompts:    daemonSrv,
-		Settings:   settingsMgr,
+		Theme:       palette,
+		KeyMap:      &km,
+		Rules:       daemonSrv,
+		RuleArchive: ruleArchive,
+		Firewall:    daemonSrv,
+		Tasks:       daemonSrv,
+		NodeConfig:  daemonSrv,
+		Prompts:     daemonSrv,
+		Settings:    settingsMgr,
 	})
 
 	prog := tea.NewProgram(rootModel, tea.WithAltScreen())

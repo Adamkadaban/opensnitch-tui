@@ -14,6 +14,18 @@ type RuleManager interface {
 	ChangeRule(nodeID string, rule state.Rule) error
 }
 
+// RuleBatchManager applies new and replacement rules after daemon acknowledgement.
+type RuleBatchManager interface {
+	ApplyRules(ctx context.Context, nodeID string, rules []state.Rule) error
+}
+
+// RuleArchive stores canonical rule JSON under a fixed node-scoped directory.
+type RuleArchive interface {
+	Directory(node state.Node) string
+	Export(ctx context.Context, node state.Node, rules []state.Rule) (string, error)
+	Import(ctx context.Context, node state.Node) ([]state.Rule, string, error)
+}
+
 // FirewallManager controls the system firewall on one daemon node.
 type FirewallManager interface {
 	EnableFirewall(ctx context.Context, nodeID string) error
