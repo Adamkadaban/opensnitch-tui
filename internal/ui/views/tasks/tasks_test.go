@@ -501,8 +501,13 @@ func TestNodeMonitorTargetV18Identity(t *testing.T) {
 		want string
 	}{
 		{node: state.Node{ID: "unix://@opensnitch"}, want: "unix:/local"},
+		{node: state.Node{ID: "unix://local/name/YWxwaGE", Address: "/local"}, want: "unix:/local"},
 		{node: state.Node{ID: "configured", Address: "unix:///run/opensnitch.sock"}, want: "unix:/local"},
 		{node: state.Node{ID: "tcp://10.0.0.2:50051"}, want: "10.0.0.2:50051"},
+		{
+			node: state.Node{ID: "tcp://10.0.0.2/name/YWxwaGE", Address: "10.0.0.2"},
+			want: "10.0.0.2",
+		},
 		{
 			node: state.Node{ID: "peer", Address: "tcp://10.0.0.3:50051"},
 			want: "10.0.0.3:50051",

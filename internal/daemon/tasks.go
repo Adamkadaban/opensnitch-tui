@@ -62,8 +62,8 @@ func (s *Server) StartTask(
 
 	s.sessionsMu.RLock()
 	sess, ok := s.sessions[nodeID]
-	s.sessionsMu.RUnlock()
 	if !ok {
+		s.sessionsMu.RUnlock()
 		return nil, fmt.Errorf("%w: %s", ErrNotificationNodeDisconnected, nodeID)
 	}
 
@@ -82,8 +82,10 @@ func (s *Server) StartTask(
 		close: func(error) {
 			task.finish(sess.closedError())
 		},
+		migrate: task.migrateNodeID,
 	}
 	if err := sess.addPendingNotification(task.id, task.pending); err != nil {
+		s.sessionsMu.RUnlock()
 		return nil, err
 	}
 
@@ -95,8 +97,10 @@ func (s *Server) StartTask(
 		Data:       task.payload,
 	}); err != nil {
 		sess.removePendingNotification(task.id, task.pending)
+		s.sessionsMu.RUnlock()
 		return nil, err
 	}
+	s.sessionsMu.RUnlock()
 
 	task.setCancelWatch(context.AfterFunc(ctx, func() {
 		task.unregister()
@@ -116,10 +120,11 @@ func (s *Server) StopTask(ctx context.Context, stream controller.TaskStream) err
 	}
 
 	task.unregister()
-	notification := s.newNotification(pb.Action_TASK_STOP, task.nodeID)
+	nodeID := task.NodeID()
+	notification := s.newNotification(pb.Action_TASK_STOP, nodeID)
 	notification.Data = task.payload
 	// OpenSnitch v1.8 does not send a reply for TASK_STOP.
-	err := s.sendNotification(task.nodeID, notification)
+	err := s.sendNotification(nodeID, notification)
 	task.finish(err)
 	return err
 }
@@ -138,7 +143,15 @@ func (t *taskStream) ID() uint64 {
 }
 
 func (t *taskStream) NodeID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.nodeID
+}
+
+func (t *taskStream) migrateNodeID(nodeID string) {
+	t.mu.Lock()
+	t.nodeID = nodeID
+	t.mu.Unlock()
 }
 
 func (t *taskStream) Name() controller.TaskName {
