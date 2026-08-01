@@ -67,7 +67,7 @@ type session struct {
 
 	mu       sync.Mutex
 	closeErr error
-	pending  map[uint64]chan *pb.NotificationReply
+	pending  map[uint64]*pendingNotification
 }
 
 type promptRequest struct {
