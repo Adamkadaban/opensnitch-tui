@@ -25,8 +25,16 @@ const (
 	cardHorizontalFrame = 8
 	minStatCardWidth    = 24
 	minTopCardWidth     = 28
-	minTrafficCardWidth = 32
+	minTrafficCardWidth = 40
 	maxTopBuckets       = 5
+	shortTerminalHint   = "Short terminal:"
+)
+
+type statLayout int
+
+const (
+	statLayoutFull statLayout = iota
+	statLayoutCompact
 )
 
 // New creates a dashboard view backed by the provided store.
@@ -42,38 +50,79 @@ func (m *Model) Update(_ tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
 
 // View renders the dashboard contents.
 func (m *Model) View() string {
-	if m.width == 0 {
+	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
 
 	snapshot := m.store.Snapshot()
 	stats := snapshot.Stats
-
-	statColumns := cardColumns(m.width, minStatCardWidth)
-	statWidth := max(1, m.width/statColumns)
-	cards := []string{
-		m.renderStat("Rules", stats.Rules, statWidth, statColumns < 4),
-		m.renderStat("Connections", stats.Connections, statWidth, statColumns < 4),
-		m.renderStat("Accepted", stats.Accepted, statWidth, statColumns < 4),
-		m.renderStat("Dropped", stats.Dropped, statWidth, statColumns < 4),
+	bodyStyle := m.theme.Body.Width(max(1, m.width)).Height(max(1, m.height))
+	contentWidth := max(1, m.width-bodyStyle.GetHorizontalFrameSize())
+	contentHeight := max(0, m.height-bodyStyle.GetVerticalFrameSize())
+	if contentHeight == 0 {
+		return bodyStyle.Padding(0).Render("")
+	}
+	if contentHeight == 1 {
+		essential := fmt.Sprintf(
+			"Rules %d · Connections %d · Accepted %d · Dropped %d · %s",
+			stats.Rules,
+			stats.Connections,
+			stats.Accepted,
+			stats.Dropped,
+			m.metaLine(snapshot),
+		)
+		return bodyStyle.Render(trimToWidth(essential, contentWidth))
 	}
 
-	row := joinCardGrid(cards, statColumns)
-	trafficWidth := min(m.width, max(minTrafficCardWidth, m.width/3))
-	insights := m.renderTraffic(stats, trafficWidth)
-	topColumns := cardColumns(m.width, minTopCardWidth)
-	topWidth := max(1, m.width/topColumns)
-	topLimit := m.topBucketLimit(stats, statColumns, topColumns)
-	secondary := joinCardGrid([]string{
-		m.renderTopList("Top destinations", limitBuckets(stats.TopDestHosts, topLimit), topWidth, topColumns < 4),
-		m.renderTopList("Top ports", limitBuckets(stats.TopDestPorts, topLimit), topWidth, topColumns < 4),
-		m.renderTopList("Top executables", limitBuckets(stats.TopExecutables, topLimit), topWidth, topColumns < 4),
-		m.renderTopList("Top users", limitBuckets(stats.TopUsers, topLimit), topWidth, topColumns < 4),
-	}, topColumns)
-	meta := m.theme.Subtle.Render(m.metaLine(snapshot))
-	body := lipgloss.JoinVertical(lipgloss.Left, row, insights, secondary, meta)
+	meta := m.theme.Subtle.Render(trimToWidth(m.metaLine(snapshot), contentWidth))
+	sections := []string{m.renderStats(stats, contentWidth, contentHeight-lipgloss.Height(meta))}
+	remaining := contentHeight - renderedHeight(sections) - lipgloss.Height(meta)
 
-	return m.theme.Body.Width(max(1, m.width)).Height(max(3, m.height)).Render(body)
+	traffic := m.renderTraffic(stats, min(contentWidth, max(minTrafficCardWidth, contentWidth/3)), false)
+	top := m.renderTopLists(stats, contentWidth, maxTopBuckets, false)
+	fullDetailsFit := lipgloss.Height(traffic)+lipgloss.Height(top) <= remaining
+	reserveHint := 0
+	if !fullDetailsFit && remaining > 0 {
+		reserveHint = 1
+	}
+	detailBudget := max(0, remaining-reserveHint)
+
+	trafficIncluded := false
+	for _, compact := range []bool{false, true} {
+		candidate := m.renderTraffic(stats, min(contentWidth, max(minTrafficCardWidth, contentWidth/3)), compact)
+		if lipgloss.Height(candidate) <= detailBudget {
+			sections = append(sections, candidate)
+			detailBudget -= lipgloss.Height(candidate)
+			trafficIncluded = true
+			break
+		}
+	}
+
+	topLimit := 0
+	for limit := maxTopBuckets; limit >= 1; limit-- {
+		for _, compact := range []bool{false, true} {
+			candidate := m.renderTopLists(stats, contentWidth, limit, compact)
+			if lipgloss.Height(candidate) <= detailBudget {
+				sections = append(sections, candidate)
+				detailBudget -= lipgloss.Height(candidate)
+				topLimit = limit
+				break
+			}
+		}
+		if topLimit > 0 {
+			break
+		}
+	}
+
+	if !trafficIncluded || topLimit < maxTopBuckets {
+		hint := m.shortTerminalHint(trafficIncluded, topLimit)
+		if renderedHeight(sections)+lipgloss.Height(meta) < contentHeight {
+			sections = append(sections, m.theme.Subtle.Render(trimToWidth(hint, contentWidth)))
+		}
+	}
+	sections = append(sections, meta)
+
+	return bodyStyle.Render(lipgloss.JoinVertical(lipgloss.Left, sections...))
 }
 
 // Title returns the tab label for this view.
@@ -90,13 +139,16 @@ func (m *Model) SetTheme(th theme.Theme) {
 	m.theme = th
 }
 
-func (m *Model) renderStat(label string, value uint64, totalWidth int, compact bool) string {
+func (m *Model) renderStat(label string, value uint64, totalWidth int, layout statLayout) string {
 	cardWidth := max(1, totalWidth-cardHorizontalFrame)
 	content := fmt.Sprintf("%d\n%s", value, label)
-	return m.cardStyle(compact).Width(cardWidth).Render(content)
+	if layout == statLayoutCompact {
+		content = fmt.Sprintf("%s %d", label, value)
+	}
+	return m.cardStyle(layout != statLayoutFull).Width(cardWidth).Render(content)
 }
 
-func (m *Model) renderTraffic(stats state.Stats, totalWidth int) string {
+func (m *Model) renderTraffic(stats state.Stats, totalWidth int, compact bool) string {
 	cardWidth := max(1, totalWidth-cardHorizontalFrame)
 	title := m.theme.Title.Render("Traffic mix")
 	segments := []struct {
@@ -116,10 +168,10 @@ func (m *Model) renderTraffic(stats state.Stats, totalWidth int) string {
 		line := m.renderBreakdownLine(seg.label, seg.value, total, seg.style, barWidth)
 		body = append(body, line)
 	}
-	if total == 0 {
+	if total == 0 && !compact {
 		body = append(body, m.theme.Subtle.Render("No traffic yet"))
 	}
-	return m.theme.Card.Width(cardWidth).Render(strings.Join(body, "\n"))
+	return m.cardStyle(compact).Width(cardWidth).Render(strings.Join(body, "\n"))
 }
 
 func (m *Model) renderTopList(title string, buckets []state.StatBucket, totalWidth int, compact bool) string {
@@ -204,6 +256,53 @@ func joinCardGrid(cards []string, columns int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
+func (m *Model) renderStats(stats state.Stats, width, height int) string {
+	columns := cardColumns(width, minStatCardWidth)
+	cardWidth := max(1, width/columns)
+	layout := statLayoutFull
+	if columns < 4 {
+		layout = statLayoutCompact
+	}
+	render := func(layout statLayout) string {
+		return joinCardGrid([]string{
+			m.renderStat("Rules", stats.Rules, cardWidth, layout),
+			m.renderStat("Connections", stats.Connections, cardWidth, layout),
+			m.renderStat("Accepted", stats.Accepted, cardWidth, layout),
+			m.renderStat("Dropped", stats.Dropped, cardWidth, layout),
+		}, columns)
+	}
+	result := render(layout)
+	if lipgloss.Height(result) <= height {
+		return result
+	}
+	result = render(statLayoutCompact)
+	if lipgloss.Height(result) <= height {
+		return result
+	}
+	return trimToWidth(
+		fmt.Sprintf(
+			"Rules %d · Connections %d · Accepted %d · Dropped %d",
+			stats.Rules,
+			stats.Connections,
+			stats.Accepted,
+			stats.Dropped,
+		),
+		width,
+	)
+}
+
+func (m *Model) renderTopLists(stats state.Stats, width, limit int, compact bool) string {
+	columns := cardColumns(width, minTopCardWidth)
+	cardWidth := max(1, width/columns)
+	compact = compact || columns < 4
+	return joinCardGrid([]string{
+		m.renderTopList("Top destinations", limitBuckets(stats.TopDestHosts, limit), cardWidth, compact),
+		m.renderTopList("Top ports", limitBuckets(stats.TopDestPorts, limit), cardWidth, compact),
+		m.renderTopList("Top executables", limitBuckets(stats.TopExecutables, limit), cardWidth, compact),
+		m.renderTopList("Top users", limitBuckets(stats.TopUsers, limit), cardWidth, compact),
+	}, columns)
+}
+
 func (m *Model) cardStyle(compact bool) lipgloss.Style {
 	if compact {
 		return m.theme.Card.Padding(0, 2)
@@ -244,31 +343,30 @@ func readyNodes(nodes []state.Node) []state.Node {
 	return ready
 }
 
-func (m *Model) topBucketLimit(stats state.Stats, statColumns, topColumns int) int {
-	if m.height <= 0 {
-		return maxTopBuckets
+func (m *Model) shortTerminalHint(trafficIncluded bool, topLimit int) string {
+	switch {
+	case !trafficIncluded:
+		return shortTerminalHint + " traffic and top lists omitted"
+	case topLimit == 0:
+		return shortTerminalHint + " top lists omitted"
+	default:
+		return shortTerminalHint + " top lists reduced"
 	}
-	statRows := (4 + statColumns - 1) / statColumns
-	statCardHeight := 6
-	if statColumns < 4 {
-		statCardHeight = 4
+}
+
+func renderedHeight(sections []string) int {
+	height := 0
+	for _, section := range sections {
+		height += lipgloss.Height(section)
 	}
-	trafficHeight := 8
-	if stats.Accepted+stats.Dropped+stats.Ignored == 0 {
-		trafficHeight++
-	}
-	topRows := (4 + topColumns - 1) / topColumns
-	topCardBase := 5
-	if topColumns < 4 {
-		topCardBase = 3
-	}
-	available := m.height - 2 - statRows*statCardHeight - trafficHeight - 1
-	limit := (available/topRows - topCardBase) / 2
-	return min(max(1, limit), maxTopBuckets)
+	return height
 }
 
 func limitBuckets(buckets []state.StatBucket, limit int) []state.StatBucket {
-	if limit <= 0 || len(buckets) <= limit {
+	if limit <= 0 {
+		return nil
+	}
+	if len(buckets) <= limit {
 		return buckets
 	}
 	return buckets[:limit]

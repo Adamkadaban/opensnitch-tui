@@ -21,7 +21,7 @@ func TestDashboardViewWaitingSnapshot(t *testing.T) {
 	m := New(store, th)
 	m.SetSize(120, 18)
 
-	viewtest.AssertSnapshot(t, m.View(), filepath.Join("testdata", "dashboard_waiting.snap"))
+	viewtest.AssertSnapshot(t, trimSnapshotPadding(m.View()), filepath.Join("testdata", "dashboard_waiting.snap"))
 }
 
 func TestTrimToWidth(t *testing.T) {
@@ -131,43 +131,120 @@ func TestDashboardMetaReadyNodes(t *testing.T) {
 }
 
 func TestDashboardRenderingStaysWithinTerminalBounds(t *testing.T) {
-	for _, size := range []struct {
+	sizes := []struct {
 		width  int
 		height int
 	}{
+		{width: 60, height: 10},
+		{width: 80, height: 18},
+		{width: 120, height: 18},
 		{width: 80, height: 40},
 		{width: 120, height: 40},
-	} {
-		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
-			store := state.NewStore()
-			store.SetNodes([]state.Node{
-				{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady},
-				{ID: "node-2", Name: "beta", Status: state.NodeStatusReady},
+	}
+	for _, preset := range theme.Presets() {
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("%s/%dx%d", preset.Name, size.width, size.height), func(t *testing.T) {
+				m := New(populatedStore(), theme.New(theme.Options{Name: preset.Name}))
+				m.SetSize(size.width, size.height)
+				rendered := m.View()
+				if got := lipgloss.Width(rendered); got > size.width {
+					t.Fatalf("rendered width %d exceeds %d", got, size.width)
+				}
+				if got := lipgloss.Height(rendered); got != size.height {
+					t.Fatalf("rendered height %d, want %d", got, size.height)
+				}
 			})
-			buckets := []state.StatBucket{
-				{Label: "one.example", Value: 10},
-				{Label: "two.example", Value: 9},
-				{Label: "three.example", Value: 8},
-				{Label: "four.example", Value: 7},
-				{Label: "five.example", Value: 6},
-			}
-			for _, nodeID := range []string{"node-1", "node-2"} {
-				store.SetStats(state.Stats{
-					NodeID: nodeID, Connections: 30, Accepted: 20, Dropped: 5, Ignored: 5,
-					TopDestHosts: buckets, TopDestPorts: buckets, TopExecutables: buckets,
-					TopUsers: buckets, UpdatedAt: time.Now(),
-				})
-			}
+		}
+	}
+}
 
-			m := New(store, theme.New(theme.Options{}))
-			m.SetSize(size.width, size.height)
+func TestDashboardShortTerminalContentPriority(t *testing.T) {
+	tests := []struct {
+		name      string
+		width     int
+		height    int
+		wanted    []string
+		notWanted []string
+	}{
+		{
+			name:      "wide short",
+			width:     120,
+			height:    18,
+			wanted:    []string{"Rules", "Connections", "Accepted", "Dropped", "Traffic mix", "2 daemons aggregated", shortTerminalHint},
+			notWanted: []string{"Top destinations"},
+		},
+		{
+			name:      "narrow short",
+			width:     80,
+			height:    18,
+			wanted:    []string{"Rules", "Connections", "Accepted", "Dropped", "Traffic mix", "2 daemons aggregated", shortTerminalHint},
+			notWanted: []string{"Top destinations"},
+		},
+		{
+			name:      "minimum practical body",
+			width:     60,
+			height:    10,
+			wanted:    []string{"Rules", "Connections", "Accepted", "Dropped", "2 daemons aggregated", shortTerminalHint},
+			notWanted: []string{"Traffic mix", "Top destinations"},
+		},
+		{
+			name:      "tall",
+			width:     120,
+			height:    40,
+			wanted:    []string{"Traffic mix", "Top destinations", "five.example", "2 daemons aggregated"},
+			notWanted: []string{shortTerminalHint},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(populatedStore(), theme.New(theme.Options{}))
+			m.SetSize(tc.width, tc.height)
 			rendered := m.View()
-			if got := lipgloss.Width(rendered); got > size.width {
-				t.Fatalf("rendered width %d exceeds %d", got, size.width)
+			for _, wanted := range tc.wanted {
+				if !strings.Contains(rendered, wanted) {
+					t.Fatalf("expected %q in dashboard:\n%s", wanted, rendered)
+				}
 			}
-			if got := lipgloss.Height(rendered); got > size.height {
-				t.Fatalf("rendered height %d exceeds %d", got, size.height)
+			for _, unwanted := range tc.notWanted {
+				if strings.Contains(rendered, unwanted) {
+					t.Fatalf("did not expect %q in dashboard:\n%s", unwanted, rendered)
+				}
 			}
 		})
 	}
+}
+
+func populatedStore() *state.Store {
+	store := state.NewStore()
+	store.SetNodes([]state.Node{
+		{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady},
+		{ID: "node-2", Name: "beta", Status: state.NodeStatusReady},
+	})
+	buckets := []state.StatBucket{
+		{Label: "one.example", Value: 10},
+		{Label: "two.example", Value: 9},
+		{Label: "three.example", Value: 8},
+		{Label: "four.example", Value: 7},
+		{Label: "five.example", Value: 6},
+	}
+	for _, nodeID := range []string{"node-1", "node-2"} {
+		store.SetStats(state.Stats{
+			NodeID: nodeID, Connections: 30, Accepted: 20, Dropped: 5, Ignored: 5,
+			TopDestHosts: buckets, TopDestPorts: buckets, TopExecutables: buckets,
+			TopUsers: buckets, UpdatedAt: time.Now(),
+		})
+	}
+	return store
+}
+
+func trimSnapshotPadding(value string) string {
+	lines := strings.Split(value, "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for idx := range lines {
+		lines[idx] = strings.TrimRight(lines[idx], " ")
+	}
+	return strings.Join(lines, "\n")
 }

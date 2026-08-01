@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -99,24 +100,91 @@ func TestFooterLineWithoutError(t *testing.T) {
 }
 
 func TestViewFitsWindow(t *testing.T) {
-	for _, size := range []struct {
+	sizes := []struct {
 		width  int
 		height int
 	}{
+		{width: 60, height: 12},
+		{width: 80, height: 20},
+		{width: 120, height: 20},
 		{width: 120, height: 40},
 		{width: 80, height: 40},
-	} {
-		store := state.NewStore()
-		model := New(store, Options{Theme: theme.New(theme.Options{})})
-		model.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+	}
+	for _, preset := range theme.Presets() {
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("%s/%dx%d", preset.Name, size.width, size.height), func(t *testing.T) {
+				store := state.NewStore()
+				model := New(store, Options{Theme: theme.New(theme.Options{Name: preset.Name})})
+				model.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 
-		rendered := model.View()
-		if got := lipgloss.Width(rendered); got > size.width {
-			t.Fatalf("rendered width %d exceeds terminal width %d", got, size.width)
+				rendered := model.View()
+				if got := lipgloss.Width(rendered); got > size.width {
+					t.Fatalf("rendered width %d exceeds terminal width %d", got, size.width)
+				}
+				if got := lipgloss.Height(rendered); got != size.height {
+					t.Fatalf("rendered height %d, want terminal height %d", got, size.height)
+				}
+				lines := strings.Split(rendered, "\n")
+				footer := lines[len(lines)-1]
+				if !strings.Contains(footer, "View Dashboard") {
+					t.Fatalf("footer is not visible on its own line: %q", footer)
+				}
+			})
 		}
-		if got := lipgloss.Height(rendered); got > size.height {
-			t.Fatalf("rendered height %d exceeds terminal height %d", got, size.height)
+	}
+}
+
+func TestShortDashboardRootPreservesPriorityContent(t *testing.T) {
+	store := state.NewStore()
+	model := New(store, Options{Theme: theme.New(theme.Options{})})
+	model.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+
+	rendered := model.View()
+	for _, wanted := range []string{
+		"Rules",
+		"Connections",
+		"Accepted",
+		"Dropped",
+		"Waiting for daemon telemetry",
+		"Short terminal:",
+	} {
+		if !strings.Contains(rendered, wanted) {
+			t.Fatalf("expected %q in short root view:\n%s", wanted, rendered)
 		}
+	}
+	if strings.Contains(rendered, "Traffic mix") {
+		t.Fatalf("traffic should yield to essential content at 60x12:\n%s", rendered)
+	}
+}
+
+func TestPromptOverlayRemainsVisibleWithinRootBounds(t *testing.T) {
+	store := state.NewStore()
+	store.AddPrompt(state.Prompt{
+		ID:       "prompt-1",
+		NodeID:   "node-1",
+		NodeName: "alpha",
+		Connection: state.Connection{
+			Protocol:    "tcp",
+			DstIP:       "203.0.113.10",
+			DstPort:     443,
+			ProcessPath: "/usr/bin/curl",
+		},
+	})
+	model := New(store, Options{Theme: theme.New(theme.Options{})})
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+
+	rendered := model.View()
+	if !strings.Contains(rendered, "Connection prompt") {
+		t.Fatalf("prompt overlay was hidden:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "View Dashboard") {
+		t.Fatalf("footer disappeared under prompt overlay:\n%s", rendered)
+	}
+	if got := lipgloss.Width(rendered); got > 80 {
+		t.Fatalf("prompt root width %d exceeds 80", got)
+	}
+	if got := lipgloss.Height(rendered); got > 20 {
+		t.Fatalf("prompt root height %d exceeds 20", got)
 	}
 }
 

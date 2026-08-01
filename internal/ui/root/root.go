@@ -309,12 +309,14 @@ func (m *Model) resize() {
 		return
 	}
 	viewWidth := max(1, m.width)
-	viewHeight := max(1, m.height-2)
+	headlineHeight := lipgloss.Height(m.renderHeadline())
+	footerHeight := lipgloss.Height(m.theme.Footer.Width(viewWidth).Render(""))
+	viewHeight := max(1, m.height-headlineHeight-footerHeight)
 	for _, v := range m.views {
 		v.SetSize(viewWidth, viewHeight)
 	}
 	if m.prompt != nil {
-		m.prompt.SetSize(m.width, max(1, m.height-2))
+		m.prompt.SetSize(m.width, viewHeight)
 	}
 }
 
