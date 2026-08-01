@@ -34,4 +34,5 @@ go.work.sum
 AGENTS.md
 artifacts/
 bin/
+dist/
 references/

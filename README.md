@@ -104,6 +104,20 @@ Alert exports use sanitized filenames, atomic replacement, `0700` directory perm
 - **Tests:** `make test` (aliases `go test ./...`)
 - **Regenerating protos:** from repo root, run `make -C opensnitch/proto` (requires `protoc` + Go plugins)
 
+## 📦 Releases
+
+Version tags matching `v*` publish checksummed Linux archives:
+
+- `linux/amd64` with YARA support
+- `linux/arm64` portable build using the `no_yara` tag
+
+The release workflow runs module verification and tests before publishing. Create a release with:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
 ## 🔍 Testing Notes
 - Keep **unit tests** green (`go test ./...`)
 - Add table/render tests under `internal/ui/views/...` when altering layout/keys
