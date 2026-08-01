@@ -123,21 +123,19 @@ func TestTaskMessagesReachInactiveTasksView(t *testing.T) {
 	store.SetActiveView(state.ViewTasks)
 
 	_, startBatch := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	startCmd := singleBatchCommand(t, startBatch)
-	started := startCmd()
+	started := runSingleCommand(t, startBatch)
 
 	model.cycle(1)
 	if model.active == state.ViewTasks {
 		t.Fatal("expected tasks view to become inactive")
 	}
 	_, waitBatch := model.Update(started)
-	waitCmd := singleBatchCommand(t, waitBatch)
 
 	stream.updates <- controller.TaskUpdate{Data: json.RawMessage(
 		`{"Uptime":9,"Loads":[65536,0,0]}`,
 	)}
-	_, nextBatch := model.Update(waitCmd())
-	if singleBatchCommand(t, nextBatch) == nil {
+	_, nextBatch := model.Update(runSingleCommand(t, waitBatch))
+	if nextBatch == nil {
 		t.Fatal("expected recurring task command while view is inactive")
 	}
 
@@ -148,15 +146,15 @@ func TestTaskMessagesReachInactiveTasksView(t *testing.T) {
 	}
 }
 
-func singleBatchCommand(t *testing.T, cmd tea.Cmd) tea.Cmd {
+func runSingleCommand(t *testing.T, cmd tea.Cmd) tea.Msg {
 	t.Helper()
 	if cmd == nil {
-		t.Fatal("expected batch command")
+		t.Fatal("expected command")
 	}
 	msg := cmd()
 	batch, ok := msg.(tea.BatchMsg)
 	if !ok {
-		t.Fatalf("expected tea.BatchMsg, got %T", msg)
+		return msg
 	}
 	var commands []tea.Cmd
 	for _, candidate := range batch {
@@ -167,5 +165,5 @@ func singleBatchCommand(t *testing.T, cmd tea.Cmd) tea.Cmd {
 	if len(commands) != 1 {
 		t.Fatalf("expected one batch command, got %d", len(commands))
 	}
-	return commands[0]
+	return runSingleCommand(t, commands[0])
 }
