@@ -12,3 +12,13 @@ type Model interface {
 	SetTheme(theme theme.Theme)
 	Title() string
 }
+
+// MessageHandler identifies messages owned by an inactive routed view.
+type MessageHandler interface {
+	HandlesMessage(tea.Msg) bool
+}
+
+// Closer releases resources owned by a routed view.
+type Closer interface {
+	Close()
+}
