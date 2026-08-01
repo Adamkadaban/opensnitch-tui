@@ -63,6 +63,7 @@ type session struct {
 }
 
 type promptRequest struct {
+	mu        sync.Mutex
 	id        string
 	prompt    state.Prompt
 	response  chan promptResponse
@@ -71,6 +72,14 @@ type promptRequest struct {
 	remaining time.Duration
 	pauseCh   chan struct{}
 	resumeCh  chan struct{}
+}
+
+func (r *promptRequest) stopTimer() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.timer != nil {
+		r.timer.Stop()
+	}
 }
 
 type promptResponse struct {
@@ -241,19 +250,24 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 		prompt:   prompt,
 		response: make(chan promptResponse, 1),
 	}
-	s.registerPrompt(req)
-	defer s.unregisterPrompt(req.id)
-
-	s.store.AddPrompt(prompt)
 	req.timer = time.NewTimer(timeout)
 	req.timerC = req.timer.C
+	s.registerPrompt(req)
+	defer s.unregisterPrompt(req.id)
+	defer req.stopTimer()
+
+	s.store.AddPrompt(prompt)
 
 	for {
+		req.mu.Lock()
+		timerC := req.timerC
+		req.mu.Unlock()
+
 		select {
 		case resp := <-req.response:
 			s.store.RemovePrompt(req.id)
 			return resp.rule, resp.err
-		case <-req.timerC:
+		case <-timerC:
 			s.store.RemovePrompt(req.id)
 			s.store.SetError(fmt.Sprintf("prompt timed out for %s", displayConnectionLabel(prompt.Connection)))
 			decision := s.defaultPromptDecision(prompt)
@@ -264,8 +278,12 @@ func (s *Server) AskRule(ctx context.Context, conn *pb.Connection) (*pb.Rule, er
 			}
 			return rule, err
 		case <-req.pauseCh:
-			// wait for resume
-			<-req.resumeCh
+			select {
+			case <-req.resumeCh:
+			case <-ctx.Done():
+				s.store.RemovePrompt(req.id)
+				return nil, ctx.Err()
+			}
 		case <-ctx.Done():
 			s.store.RemovePrompt(req.id)
 			return nil, ctx.Err()
@@ -520,19 +538,23 @@ func (s *Server) PausePrompt(promptID string) error {
 	if req == nil {
 		return fmt.Errorf("prompt %s not found", promptID)
 	}
+
+	req.mu.Lock()
 	if req.timer == nil {
+		req.mu.Unlock()
 		return fmt.Errorf("prompt %s has no timer", promptID)
 	}
 	if req.remaining > 0 {
-		// already paused
+		remaining := req.remaining
+		req.mu.Unlock()
 		s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
 			p.Paused = true
-			p.Remaining = req.remaining
+			p.Remaining = remaining
 		})
 		return nil
 	}
 	if !req.timer.Stop() {
-		// timer already fired
+		req.mu.Unlock()
 		return fmt.Errorf("prompt %s timer already expired", promptID)
 	}
 	req.remaining = time.Until(req.prompt.ExpiresAt)
@@ -540,13 +562,16 @@ func (s *Server) PausePrompt(promptID string) error {
 		req.remaining = 0
 	}
 	req.timerC = nil
+	remaining := req.remaining
+	req.mu.Unlock()
+
 	select {
 	case req.pauseCh <- struct{}{}:
 	default:
 	}
 	s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
 		p.Paused = true
-		p.Remaining = req.remaining
+		p.Remaining = remaining
 	})
 	return nil
 }
@@ -557,7 +582,10 @@ func (s *Server) ResumePrompt(promptID string) error {
 	if req == nil {
 		return fmt.Errorf("prompt %s not found", promptID)
 	}
+
+	req.mu.Lock()
 	if req.remaining <= 0 {
+		req.mu.Unlock()
 		s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
 			p.Paused = false
 			p.Remaining = 0
@@ -567,11 +595,14 @@ func (s *Server) ResumePrompt(promptID string) error {
 	req.timer = time.NewTimer(req.remaining)
 	req.timerC = req.timer.C
 	req.prompt.ExpiresAt = time.Now().Add(req.remaining)
+	expiresAt := req.prompt.ExpiresAt
 	req.remaining = 0
+	req.mu.Unlock()
+
 	s.store.UpdatePrompt(promptID, func(p *state.Prompt) {
 		p.Paused = false
 		p.Remaining = 0
-		p.ExpiresAt = req.prompt.ExpiresAt
+		p.ExpiresAt = expiresAt
 	})
 	select {
 	case req.resumeCh <- struct{}{}:
