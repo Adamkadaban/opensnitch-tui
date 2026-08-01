@@ -13,6 +13,7 @@ import (
 const (
 	notificationQueueSize    = 8
 	notificationPendingLimit = 8
+	notificationIDFloor      = 10_000
 )
 
 var (
