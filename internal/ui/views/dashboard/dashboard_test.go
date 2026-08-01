@@ -45,3 +45,21 @@ func TestTrimToWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestCardColumns(t *testing.T) {
+	cases := []struct {
+		width   int
+		minimum int
+		expect  int
+	}{
+		{width: 120, minimum: 28, expect: 4},
+		{width: 80, minimum: 28, expect: 2},
+		{width: 55, minimum: 28, expect: 1},
+	}
+
+	for _, tc := range cases {
+		if got := cardColumns(tc.width, tc.minimum); got != tc.expect {
+			t.Fatalf("cardColumns(%d, %d) = %d, want %d", tc.width, tc.minimum, got, tc.expect)
+		}
+	}
+}

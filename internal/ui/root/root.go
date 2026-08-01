@@ -20,6 +20,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/nodes"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/rules"
 	settingsview "github.com/adamkadaban/opensnitch-tui/internal/ui/views/settings"
+	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
 // Options controls how the root model is assembled.
@@ -111,12 +112,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		for _, v := range m.views {
-			v.SetSize(msg.Width, max(1, msg.Height-2))
-		}
-		if m.prompt != nil {
-			m.prompt.SetSize(msg.Width, max(1, msg.Height-2))
-		}
+		m.resize()
 
 	case tea.KeyMsg:
 		switch {
@@ -147,10 +143,7 @@ func (m *Model) View() string {
 		return ""
 	}
 
-	headline := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.theme.Title.Render("OpenSnitch TUI"),
-		lipgloss.NewStyle().Padding(0, 1).Render(m.renderTabs()),
-	)
+	headline := m.renderHeadline()
 
 	body := activeView.View()
 	if m.prompt != nil {
@@ -159,7 +152,9 @@ func (m *Model) View() string {
 		}
 	}
 	snapshot := m.store.Snapshot()
-	footer := m.theme.Footer.Render(m.footerLine(snapshot))
+	footerTextWidth := max(1, m.width-m.theme.Footer.GetHorizontalFrameSize())
+	footerLine := util.AnsiSlice(m.footerLine(snapshot), 0, footerTextWidth)
+	footer := m.theme.Footer.Width(max(1, m.width)).Render(footerLine)
 
 	return lipgloss.JoinVertical(lipgloss.Left, headline, body, footer)
 }
@@ -188,16 +183,51 @@ func (m *Model) closeSubscription() {
 	}
 }
 
-func (m *Model) renderTabs() string {
+func (m *Model) renderHeadline() string {
+	title := m.theme.Title.Render("OpenSnitch TUI")
+	gap := lipgloss.NewStyle().Padding(0, 1)
+	available := m.width - lipgloss.Width(title) - gap.GetHorizontalFrameSize()
+	tabs := m.renderTabs(available)
+	if available <= 0 || lipgloss.Width(tabs) > available {
+		return m.renderActiveTab(m.width)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, title, gap.Render(tabs))
+}
+
+func (m *Model) renderTabs(maxWidth int) string {
+	for padding := 2; padding >= 0; padding-- {
+		rendered := m.renderTabRow(padding)
+		if lipgloss.Width(rendered) <= maxWidth {
+			return rendered
+		}
+	}
+	return m.renderActiveTab(maxWidth)
+}
+
+func (m *Model) renderTabRow(padding int) string {
 	labels := make([]string, 0, len(m.order))
 	for _, kind := range m.order {
-		view := m.views[kind]
-		if view == nil {
+		viewModel := m.views[kind]
+		if viewModel == nil {
 			continue
 		}
-		labels = append(labels, m.theme.RenderTab(view.Title(), kind == m.active))
+		style := m.theme.TabInactive
+		if kind == m.active {
+			style = m.theme.TabActive
+		}
+		labels = append(labels, style.Padding(0, padding).Render(viewModel.Title()))
 	}
 	return strings.Join(labels, " ")
+}
+
+func (m *Model) renderActiveTab(maxWidth int) string {
+	activeView := m.activeView()
+	if activeView == nil || maxWidth <= 0 {
+		return ""
+	}
+	padding := min(1, maxWidth/2)
+	label := util.TruncateString(activeView.Title(), max(1, maxWidth-padding*2))
+	return m.theme.TabActive.Padding(0, padding).Render(label)
 }
 
 func (m *Model) onStoreChanged() {
@@ -226,6 +256,21 @@ func (m *Model) applyTheme(th theme.Theme) {
 	}
 	if m.prompt != nil {
 		m.prompt.SetTheme(th)
+	}
+	m.resize()
+}
+
+func (m *Model) resize() {
+	if m.width <= 0 || m.height <= 0 {
+		return
+	}
+	viewWidth := max(1, m.width)
+	viewHeight := max(1, m.height-2)
+	for _, v := range m.views {
+		v.SetSize(viewWidth, viewHeight)
+	}
+	if m.prompt != nil {
+		m.prompt.SetSize(m.width, max(1, m.height-2))
 	}
 }
 
