@@ -11,11 +11,12 @@ import (
 
 // Store guards shared application state needed by multiple Bubble Tea models.
 type Store struct {
-	mu       sync.RWMutex
-	snapshot Snapshot
-	subs     map[int]*Subscription
-	nextSub  int
-	errorTTL time.Duration
+	mu         sync.RWMutex
+	snapshot   Snapshot
+	subs       map[int]*Subscription
+	nextSub    int
+	errorTTL   time.Duration
+	errorTimer *time.Timer
 }
 
 const (
@@ -204,13 +205,18 @@ func eventKey(ev Event) string {
 // SetError records a user-visible error message.
 func (s *Store) SetError(msg string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.errorTimer != nil {
+		s.errorTimer.Stop()
+	}
 	issuedAt := time.Now()
 	s.snapshot.LastError = msg
 	s.snapshot.LastErrorAt = issuedAt
 	s.notifyLocked()
-	s.mu.Unlock()
-
-	go s.expireError(issuedAt)
+	s.errorTimer = time.AfterFunc(s.errorTTL, func() {
+		s.expireError(issuedAt)
+	})
 }
 
 // ClearError removes the currently displayed error message, if any.
@@ -218,6 +224,10 @@ func (s *Store) ClearError() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.errorTimer != nil {
+		s.errorTimer.Stop()
+		s.errorTimer = nil
+	}
 	if s.snapshot.LastError == "" {
 		return
 	}
@@ -396,10 +406,6 @@ func (s *Store) removeSubscription(id int) {
 }
 
 func (s *Store) expireError(issuedAt time.Time) {
-	timer := time.NewTimer(s.errorTTL)
-	defer timer.Stop()
-	<-timer.C
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -409,6 +415,7 @@ func (s *Store) expireError(issuedAt time.Time) {
 	if !s.snapshot.LastErrorAt.Equal(issuedAt) {
 		return
 	}
+	s.errorTimer = nil
 	s.snapshot.LastError = ""
 	s.snapshot.LastErrorAt = time.Time{}
 	s.notifyLocked()
