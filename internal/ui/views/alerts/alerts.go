@@ -306,7 +306,7 @@ func operatorDetail(operator state.RuleOperator, depth int, budget *int) []strin
 	}
 	*budget = *budget - 1
 	data := safe(operator.Data)
-	if operator.Sensitive || alertsafety.SensitiveName(operator.Operand) {
+	if alertsafety.SensitiveName(operator.Operand) {
 		data = alertsafety.Redacted
 	}
 	line := fmt.Sprintf("%s- %s %s %s", strings.Repeat("  ", depth), safe(operator.Type), safe(operator.Operand), data)

@@ -208,6 +208,25 @@ func TestAlertsTerminalBounds(t *testing.T) {
 	}
 }
 
+func TestRuleDetailPreservesCaseSensitiveData(t *testing.T) {
+	store := state.NewStore()
+	store.AddAlert(state.Alert{
+		ID: "case-sensitive", PayloadKind: state.AlertPayloadRule,
+		Rule: &state.Rule{
+			Name: "case-sensitive-path",
+			Operator: state.RuleOperator{
+				Type: "simple", Operand: "process.path", Data: "/Opt/Case/Sensitive/App", Sensitive: true,
+			},
+		},
+	})
+	model := newModel(store, nil)
+	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if output := model.View(); !strings.Contains(output, "/Opt/Case/Sensitive/App") {
+		t.Fatalf("case-sensitive rule data was redacted: %q", output)
+	}
+}
+
 func newModel(store *state.Store, archive *fakeArchive) *Model {
 	th := theme.New(theme.Options{})
 	var model *Model
