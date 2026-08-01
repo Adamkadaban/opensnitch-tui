@@ -351,6 +351,7 @@ type Snapshot struct {
 	ActiveView      ViewKind
 	Nodes           []Node
 	Stats           Stats
+	StatsByNode     map[string]Stats
 	Alerts          []Alert
 	Rules           map[string][]Rule
 	SystemFirewalls map[string]SystemFirewall

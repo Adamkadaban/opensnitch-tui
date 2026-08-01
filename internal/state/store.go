@@ -22,6 +22,7 @@ type Store struct {
 
 const (
 	maxAlerts              = 100
+	maxTopBuckets          = 5
 	defaultErrorDisplayTTL = 10 * time.Second
 )
 
@@ -38,6 +39,7 @@ func NewStore() *Store {
 		snapshot: Snapshot{
 			ActiveView:      ViewDashboard,
 			Nodes:           []Node{},
+			StatsByNode:     make(map[string]Stats),
 			Rules:           make(map[string][]Rule),
 			SystemFirewalls: make(map[string]SystemFirewall),
 			NodeConfigs:     make(map[string]NodeConfigState),
@@ -71,6 +73,7 @@ func (s *Store) Snapshot() Snapshot {
 	copySnap.NodeConfigs = cloneNodeConfigsMap(s.snapshot.NodeConfigs)
 	copySnap.Settings = s.snapshot.Settings
 	copySnap.Stats = cloneStats(s.snapshot.Stats)
+	copySnap.StatsByNode = cloneStatsMap(s.snapshot.StatsByNode)
 	copySnap.Prompts = clonePrompts(s.snapshot.Prompts)
 	return copySnap
 }
@@ -105,6 +108,8 @@ func (s *Store) SetNodes(nodes []Node) {
 	defer s.mu.Unlock()
 
 	s.snapshot.Nodes = cloneNodes(nodes)
+	s.refreshStatsNodeNamesLocked()
+	s.aggregateReadyStatsLocked()
 	s.notifyLocked()
 }
 
@@ -114,6 +119,7 @@ func (s *Store) UpsertNode(node Node) {
 	defer s.mu.Unlock()
 
 	s.upsertNodeLocked(node)
+	s.aggregateReadyStatsLocked()
 	s.notifyLocked()
 }
 
@@ -129,6 +135,8 @@ func (s *Store) UpdateNode(id string, fn func(*Node)) bool {
 	node := s.snapshot.Nodes[idx]
 	fn(&node)
 	s.snapshot.Nodes[idx] = node
+	s.refreshStatsNodeNameLocked(node.ID, node.Name)
+	s.aggregateReadyStatsLocked()
 	s.notifyLocked()
 	return true
 }
@@ -147,6 +155,7 @@ func (s *Store) UpdateNodeStatus(id string, status NodeStatus, message string, l
 			Message:  message,
 			LastSeen: lastSeen,
 		})
+		s.aggregateReadyStatsLocked()
 		s.notifyLocked()
 		return
 	}
@@ -159,6 +168,7 @@ func (s *Store) UpdateNodeStatus(id string, status NodeStatus, message string, l
 		node.LastSeen = lastSeen
 	}
 	s.snapshot.Nodes[idx] = node
+	s.aggregateReadyStatsLocked()
 	s.notifyLocked()
 }
 
@@ -179,15 +189,19 @@ func (s *Store) ActiveView() ViewKind {
 	return s.snapshot.ActiveView
 }
 
-// SetStats replaces the cached dashboard statistics.
+// SetStats replaces one node's cached dashboard statistics.
 func (s *Store) SetStats(stats Stats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Merge events so they don't disappear when stats updates lack events.
-	stats.Events = mergeEvents(s.snapshot.Stats.Events, stats.Events, maxEvents)
-
-	s.snapshot.Stats = cloneStats(stats)
+	if s.snapshot.StatsByNode == nil {
+		s.snapshot.StatsByNode = make(map[string]Stats)
+	}
+	if stats.NodeID != "" {
+		s.snapshot.StatsByNode[stats.NodeID] = cloneStats(stats)
+	}
+	s.snapshot.Stats.Events = mergeEvents(s.snapshot.Stats.Events, stats.Events, maxEvents)
+	s.aggregateReadyStatsLocked()
 	s.notifyLocked()
 }
 
@@ -229,6 +243,87 @@ func mergeEvents(old, incoming []Event, limit int) []Event {
 
 func eventKey(ev Event) string {
 	return fmt.Sprintf("%s|%d|%s|%s|%s|%s|%d", ev.NodeID, ev.UnixNano, ev.Time, ev.Rule.Name, ev.Connection.DstHost, ev.Connection.DstIP, ev.Connection.DstPort)
+}
+
+func (s *Store) aggregateReadyStatsLocked() {
+	events := s.snapshot.Stats.Events
+	ready := make([]Node, 0, len(s.snapshot.Nodes))
+	seen := make(map[string]struct{}, len(s.snapshot.Nodes))
+	for _, node := range s.snapshot.Nodes {
+		if node.Status != NodeStatusReady {
+			continue
+		}
+		if _, ok := seen[node.ID]; ok {
+			continue
+		}
+		seen[node.ID] = struct{}{}
+		ready = append(ready, node)
+	}
+
+	aggregate := Stats{}
+	if len(ready) == 1 {
+		if stats, ok := s.snapshot.StatsByNode[ready[0].ID]; ok {
+			aggregate = cloneStats(stats)
+		}
+	} else {
+		for _, node := range ready {
+			stats, ok := s.snapshot.StatsByNode[node.ID]
+			if !ok {
+				continue
+			}
+			aggregate.Rules += stats.Rules
+			aggregate.Connections += stats.Connections
+			aggregate.Accepted += stats.Accepted
+			aggregate.Dropped += stats.Dropped
+			aggregate.Ignored += stats.Ignored
+			aggregate.RuleHits += stats.RuleHits
+			aggregate.RuleMisses += stats.RuleMisses
+			aggregate.TopDestHosts = mergeStatBuckets(aggregate.TopDestHosts, stats.TopDestHosts, 0)
+			aggregate.TopDestPorts = mergeStatBuckets(aggregate.TopDestPorts, stats.TopDestPorts, 0)
+			aggregate.TopExecutables = mergeStatBuckets(aggregate.TopExecutables, stats.TopExecutables, 0)
+			aggregate.TopUsers = mergeStatBuckets(aggregate.TopUsers, stats.TopUsers, 0)
+			if stats.UpdatedAt.After(aggregate.UpdatedAt) {
+				aggregate.UpdatedAt = stats.UpdatedAt
+			}
+		}
+		if len(ready) > 1 {
+			aggregate.TopDestHosts = mergeStatBuckets(aggregate.TopDestHosts, nil, maxTopBuckets)
+			aggregate.TopDestPorts = mergeStatBuckets(aggregate.TopDestPorts, nil, maxTopBuckets)
+			aggregate.TopExecutables = mergeStatBuckets(aggregate.TopExecutables, nil, maxTopBuckets)
+			aggregate.TopUsers = mergeStatBuckets(aggregate.TopUsers, nil, maxTopBuckets)
+			aggregate.NodeName = fmt.Sprintf("Aggregated telemetry (%d ready daemons)", len(ready))
+			aggregate.DaemonVersion = "multiple daemons"
+		}
+	}
+	aggregate.Events = cloneEvents(events)
+	s.snapshot.Stats = aggregate
+}
+
+func mergeStatBuckets(current, incoming []StatBucket, limit int) []StatBucket {
+	values := make(map[string]uint64, len(current)+len(incoming))
+	for _, bucket := range current {
+		values[bucket.Label] += bucket.Value
+	}
+	for _, bucket := range incoming {
+		values[bucket.Label] += bucket.Value
+	}
+	buckets := make([]StatBucket, 0, len(values))
+	for label, value := range values {
+		if value == 0 {
+			continue
+		}
+		buckets = append(buckets, StatBucket{Label: label, Value: value})
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		if buckets[i].Value == buckets[j].Value {
+			return buckets[i].Label < buckets[j].Label
+		}
+		return buckets[i].Value > buckets[j].Value
+	})
+	if limit > 0 && len(buckets) > limit {
+		buckets = buckets[:limit]
+	}
+	return buckets
 }
 
 // SetError records a user-visible error message.
@@ -764,6 +859,17 @@ func cloneStats(stats Stats) Stats {
 	return stats
 }
 
+func cloneStatsMap(statsByNode map[string]Stats) map[string]Stats {
+	if len(statsByNode) == 0 {
+		return nil
+	}
+	copyMap := make(map[string]Stats, len(statsByNode))
+	for nodeID, stats := range statsByNode {
+		copyMap[nodeID] = cloneStats(stats)
+	}
+	return copyMap
+}
+
 func cloneEvents(events []Event) []Event {
 	if len(events) == 0 {
 		return nil
@@ -854,10 +960,13 @@ func (s *Store) upsertNodeLocked(node Node) {
 	idx := s.indexOfLocked(node.ID)
 	if idx == -1 {
 		s.snapshot.Nodes = append(s.snapshot.Nodes, node)
+		s.refreshStatsNodeNameLocked(node.ID, node.Name)
 		return
 	}
 	existing := s.snapshot.Nodes[idx]
-	s.snapshot.Nodes[idx] = mergeNodes(existing, node)
+	merged := mergeNodes(existing, node)
+	s.snapshot.Nodes[idx] = merged
+	s.refreshStatsNodeNameLocked(merged.ID, merged.Name)
 }
 
 func (s *Store) indexOfLocked(id string) int {
@@ -923,8 +1032,29 @@ func (s *Store) syncRuleCountLocked(nodeID string) {
 	if nodeID == "" {
 		return
 	}
-	if s.snapshot.Stats.NodeID != nodeID {
+	stats, ok := s.snapshot.StatsByNode[nodeID]
+	if !ok {
 		return
 	}
-	s.snapshot.Stats.Rules = uint64(len(s.snapshot.Rules[nodeID]))
+	stats.Rules = uint64(len(s.snapshot.Rules[nodeID]))
+	s.snapshot.StatsByNode[nodeID] = stats
+	s.aggregateReadyStatsLocked()
+}
+
+func (s *Store) refreshStatsNodeNamesLocked() {
+	for _, node := range s.snapshot.Nodes {
+		s.refreshStatsNodeNameLocked(node.ID, node.Name)
+	}
+}
+
+func (s *Store) refreshStatsNodeNameLocked(nodeID, nodeName string) {
+	if nodeName == "" {
+		return
+	}
+	stats, ok := s.snapshot.StatsByNode[nodeID]
+	if !ok {
+		return
+	}
+	stats.NodeName = nodeName
+	s.snapshot.StatsByNode[nodeID] = stats
 }

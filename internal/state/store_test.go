@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -79,6 +80,7 @@ func TestStoreUpdateNodeStatusNotifiesSubscribersOnNewNode(t *testing.T) {
 
 func TestStoreSetStatsAndError(t *testing.T) {
 	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})
 	stats := Stats{NodeID: "node-1", Rules: 10}
 	store.SetStats(stats)
 	store.SetError("boom")
@@ -286,6 +288,7 @@ func TestStoreAlertDeepCopyIsolation(t *testing.T) {
 
 func TestStoreSetRulesCopiesData(t *testing.T) {
 	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})
 	store.SetStats(Stats{NodeID: "node-1"})
 	rules := []Rule{{
 		NodeID:      "node-1",
@@ -457,6 +460,7 @@ func testSystemFirewall(nodeID, marker string) SystemFirewall {
 
 func TestStoreAddRuleUpdatesStats(t *testing.T) {
 	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})
 	store.SetStats(Stats{NodeID: "node-1"})
 	store.AddRule("node-1", Rule{Name: "http"})
 
@@ -512,6 +516,7 @@ func TestStoreUpdateRule(t *testing.T) {
 
 func TestStoreRemoveRule(t *testing.T) {
 	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})
 	store.SetStats(Stats{NodeID: "node-1"})
 	store.SetRules("node-1", []Rule{{Name: "ssh"}, {Name: "http"}})
 
@@ -543,7 +548,6 @@ func TestStoreSubscriptionCloseStopsEvents(t *testing.T) {
 	if _, ok := <-sub.Events(); ok {
 		t.Fatal("expected events channel to be closed after Close")
 	}
-
 	store.SetStats(Stats{Rules: 2})
 	select {
 	case _, ok := <-sub.Events():
@@ -551,5 +555,252 @@ func TestStoreSubscriptionCloseStopsEvents(t *testing.T) {
 			t.Fatal("did not expect events after subscription closed")
 		}
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestStoreAggregatesReadyNodeStats(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{
+		{ID: "node-1", Name: "alpha", Status: NodeStatusReady},
+		{ID: "node-2", Name: "beta", Status: NodeStatusReady},
+	})
+	older := time.Unix(100, 0)
+	newer := time.Unix(200, 0)
+	store.SetStats(Stats{
+		NodeID: "node-1", NodeName: "alpha", DaemonVersion: "1.6.0",
+		Rules: 2, Connections: 10, Accepted: 7, Dropped: 2, Ignored: 1,
+		RuleHits: 8, RuleMisses: 2, UpdatedAt: older,
+	})
+	store.SetStats(Stats{
+		NodeID: "node-2", NodeName: "beta", DaemonVersion: "1.7.0",
+		Rules: 3, Connections: 20, Accepted: 15, Dropped: 4, Ignored: 1,
+		RuleHits: 17, RuleMisses: 3, UpdatedAt: newer,
+	})
+
+	snapshot := store.Snapshot()
+	stats := snapshot.Stats
+	if stats.Rules != 5 || stats.Connections != 30 || stats.Accepted != 22 ||
+		stats.Dropped != 6 || stats.Ignored != 2 || stats.RuleHits != 25 || stats.RuleMisses != 5 {
+		t.Fatalf("unexpected aggregate counts: %+v", stats)
+	}
+	if stats.NodeID != "" || stats.NodeName != "Aggregated telemetry (2 ready daemons)" {
+		t.Fatalf("unexpected aggregate node metadata: %+v", stats)
+	}
+	if stats.DaemonVersion != "multiple daemons" {
+		t.Fatalf("expected aggregate daemon metadata, got %q", stats.DaemonVersion)
+	}
+	if !stats.UpdatedAt.Equal(newer) {
+		t.Fatalf("expected newest update %s, got %s", newer, stats.UpdatedAt)
+	}
+	if len(snapshot.StatsByNode) != 2 {
+		t.Fatalf("expected two per-node snapshots, got %d", len(snapshot.StatsByNode))
+	}
+}
+
+func TestStoreSetStatsReplacesNodeSnapshot(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})
+	store.SetStats(Stats{NodeID: "node-1", Connections: 10, Accepted: 8})
+	store.SetStats(Stats{NodeID: "node-1", Connections: 12, Accepted: 9})
+
+	stats := store.Snapshot().Stats
+	if stats.Connections != 12 || stats.Accepted != 9 {
+		t.Fatalf("expected replacement counts, got %+v", stats)
+	}
+}
+
+func TestStorePreservesSingleNodeStatsMetadata(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Name: "configured-name", Status: NodeStatusReady}})
+	updated := time.Unix(300, 0)
+	store.SetStats(Stats{
+		NodeID: "node-1", NodeName: "reported-name", DaemonVersion: "1.7.1",
+		Connections: 4, UpdatedAt: updated,
+	})
+
+	stats := store.Snapshot().Stats
+	if stats.NodeID != "node-1" || stats.NodeName != "reported-name" ||
+		stats.DaemonVersion != "1.7.1" || !stats.UpdatedAt.Equal(updated) {
+		t.Fatalf("single-node metadata changed: %+v", stats)
+	}
+}
+
+func TestStoreMergesTopBuckets(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{
+		{ID: "node-1", Status: NodeStatusReady},
+		{ID: "node-2", Status: NodeStatusReady},
+	})
+	first := []StatBucket{
+		{Label: "shared", Value: 4},
+		{Label: "charlie", Value: 3},
+		{Label: "delta", Value: 3},
+		{Label: "echo", Value: 3},
+		{Label: "foxtrot", Value: 3},
+		{Label: "late", Value: 1},
+	}
+	second := []StatBucket{
+		{Label: "shared", Value: 6},
+		{Label: "late", Value: 8},
+		{Label: "alpha", Value: 3},
+		{Label: "bravo", Value: 3},
+	}
+	store.SetStats(Stats{
+		NodeID: "node-1", TopDestHosts: first, TopDestPorts: first,
+		TopExecutables: first, TopUsers: first,
+	})
+	store.SetStats(Stats{
+		NodeID: "node-2", TopDestHosts: second, TopDestPorts: second,
+		TopExecutables: second, TopUsers: second,
+	})
+
+	want := []StatBucket{
+		{Label: "shared", Value: 10},
+		{Label: "late", Value: 9},
+		{Label: "alpha", Value: 3},
+		{Label: "bravo", Value: 3},
+		{Label: "charlie", Value: 3},
+	}
+	stats := store.Snapshot().Stats
+	for name, got := range map[string][]StatBucket{
+		"destinations": stats.TopDestHosts,
+		"ports":        stats.TopDestPorts,
+		"executables":  stats.TopExecutables,
+		"users":        stats.TopUsers,
+	} {
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("unexpected merged %s: want %+v, got %+v", name, want, got)
+		}
+	}
+}
+
+func TestStoreStatsDisconnectReconnect(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{
+		{ID: "node-1", Name: "alpha", Status: NodeStatusReady},
+		{ID: "node-2", Name: "beta", Status: NodeStatusReady},
+	})
+	store.SetStats(Stats{NodeID: "node-1", Connections: 10})
+	store.SetStats(Stats{NodeID: "node-2", Connections: 20})
+
+	store.UpdateNodeStatus("node-2", NodeStatusDisconnected, "offline", time.Now())
+	snapshot := store.Snapshot()
+	if snapshot.Stats.Connections != 10 || snapshot.Stats.NodeID != "node-1" {
+		t.Fatalf("expected only node-1 while disconnected, got %+v", snapshot.Stats)
+	}
+	if snapshot.StatsByNode["node-2"].Connections != 20 {
+		t.Fatal("expected disconnected node stats to remain cached")
+	}
+
+	store.UpdateNodeStatus("node-2", NodeStatusReady, "reconnected", time.Now())
+	if got := store.Snapshot().Stats.Connections; got != 30 {
+		t.Fatalf("expected cached stats after reconnect, got %d", got)
+	}
+	store.UpdateNodeStatus("node-2", NodeStatusError, "failed", time.Now())
+	if got := store.Snapshot().Stats.Connections; got != 10 {
+		t.Fatalf("expected error node to be excluded, got %d", got)
+	}
+	store.UpdateNodeStatus("node-2", NodeStatusReady, "reconnected", time.Now())
+	store.SetStats(Stats{NodeID: "node-2", Connections: 25})
+	if got := store.Snapshot().Stats.Connections; got != 35 {
+		t.Fatalf("expected new reconnect stats to replace cached stats, got %d", got)
+	}
+}
+
+func TestStoreStatsBeforeSubscribe(t *testing.T) {
+	store := NewStore()
+	store.SetStats(Stats{NodeID: "node-1", NodeName: "node-1", Connections: 9})
+
+	snapshot := store.Snapshot()
+	if snapshot.Stats.Connections != 0 {
+		t.Fatalf("expected unknown node excluded, got %+v", snapshot.Stats)
+	}
+	if snapshot.StatsByNode["node-1"].Connections != 9 {
+		t.Fatal("expected unknown node stats to be retained")
+	}
+
+	store.UpsertNode(Node{ID: "node-1", Name: "alpha", Status: NodeStatusReady})
+	snapshot = store.Snapshot()
+	if snapshot.Stats.Connections != 9 || snapshot.Stats.NodeName != "alpha" {
+		t.Fatalf("expected cached stats after subscribe, got %+v", snapshot.Stats)
+	}
+}
+
+func TestStoreStatsByNodeDeepCopyIsolation(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})
+	input := Stats{
+		NodeID:       "node-1",
+		TopDestHosts: []StatBucket{{Label: "example.com", Value: 2}},
+		Events: []Event{{
+			NodeID: "node-1",
+			Connection: Connection{
+				ProcessArgs: []string{"curl"},
+			},
+		}},
+	}
+	store.SetStats(input)
+	input.TopDestHosts[0].Label = "mutated"
+	input.Events[0].Connection.ProcessArgs[0] = "mutated"
+
+	first := store.Snapshot()
+	if first.StatsByNode["node-1"].TopDestHosts[0].Label != "example.com" {
+		t.Fatal("store retained input bucket alias")
+	}
+	stats := first.StatsByNode["node-1"]
+	stats.TopDestHosts[0].Label = "snapshot"
+	stats.Events[0].Connection.ProcessArgs[0] = "snapshot"
+	first.StatsByNode["node-1"] = stats
+	delete(first.StatsByNode, "node-1")
+
+	second := store.Snapshot()
+	if second.StatsByNode["node-1"].TopDestHosts[0].Label != "example.com" {
+		t.Fatal("snapshot bucket mutation reached store")
+	}
+	if second.StatsByNode["node-1"].Events[0].Connection.ProcessArgs[0] != "curl" {
+		t.Fatal("snapshot event mutation reached store")
+	}
+}
+
+func TestStoreStatsBucketOrderDeterministic(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{
+		{ID: "node-2", Status: NodeStatusReady},
+		{ID: "node-1", Status: NodeStatusReady},
+	})
+	store.SetStats(Stats{NodeID: "node-1", TopUsers: []StatBucket{
+		{Label: "zoe", Value: 5},
+		{Label: "amy", Value: 5},
+	}})
+	store.SetStats(Stats{NodeID: "node-2", TopUsers: []StatBucket{
+		{Label: "mike", Value: 5},
+	}})
+
+	want := []StatBucket{
+		{Label: "amy", Value: 5},
+		{Label: "mike", Value: 5},
+		{Label: "zoe", Value: 5},
+	}
+	for range 20 {
+		if got := store.Snapshot().Stats.TopUsers; !reflect.DeepEqual(got, want) {
+			t.Fatalf("non-deterministic bucket order: want %+v, got %+v", want, got)
+		}
+	}
+}
+
+func TestStoreStatsEventsRemainGlobalAcrossReadiness(t *testing.T) {
+	store := NewStore()
+	store.SetNodes([]Node{{ID: "node-1", Status: NodeStatusReady}})
+	store.SetStats(Stats{NodeID: "node-1", Events: []Event{{
+		NodeID: "node-1", UnixNano: 1,
+	}}})
+	store.UpdateNodeStatus("node-1", NodeStatusDisconnected, "offline", time.Now())
+	store.SetStats(Stats{NodeID: "node-2", Events: []Event{{
+		NodeID: "node-2", UnixNano: 2,
+	}}})
+
+	events := store.Snapshot().Stats.Events
+	if len(events) != 2 || events[0].NodeID != "node-2" || events[1].NodeID != "node-1" {
+		t.Fatalf("expected unchanged global event history, got %+v", events)
 	}
 }
