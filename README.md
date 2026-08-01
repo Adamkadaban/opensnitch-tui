@@ -64,16 +64,6 @@ Use `Tab` and `Shift+Tab` to switch views. Navigation uses arrow keys only; ther
 | Settings | Arrows and Enter/Space |
 | Prompt | `a` allow, `d` deny, `r` reject, `v` advanced matches, `i` inspect |
 
-## What are Tasks?
-
-Tasks are live telemetry streams running on the selected OpenSnitch daemon. They do not enable firewall functionality or update another view.
-
-- **Node monitor:** uptime, load, memory, swap, and process counts.
-- **Sockets monitor:** socket totals grouped by protocol, family, and state.
-- **PID monitor:** reserved for a future safe PID-selection flow.
-
-After pressing `s`, the selected profile changes from `WAITING` to `RUNNING` when its first update arrives. Output appears directly in that profile's detail panel. If no update arrives within 15 seconds, the TUI stops the stream and displays troubleshooting guidance.
-
 ## Configuration
 
 The optional TUI configuration lives at:
