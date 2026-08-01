@@ -15,7 +15,7 @@ import (
 func TestServerAskRuleCancelWhilePaused(t *testing.T) {
 	store := state.NewStore()
 	nodeAddr := "1.2.3.4:6000"
-	nodeID := "tcp://" + nodeAddr
+	nodeID := "tcp://1.2.3.4"
 	store.SetStats(state.Stats{NodeID: nodeID})
 	settings := store.Snapshot().Settings
 	settings.PromptTimeout = 5 * time.Second
@@ -115,6 +115,24 @@ func TestParseListenAddr(t *testing.T) {
 	}
 }
 
+func TestStablePeerIdentityIgnoresTCPSourcePort(t *testing.T) {
+	first := testAddr{network: "tcp", value: "10.0.0.6:40882"}
+	second := testAddr{network: "tcp", value: "10.0.0.6:43306"}
+	if got := stablePeerIdentity(&first); got != "tcp://10.0.0.6" {
+		t.Fatalf("unexpected first identity %q", got)
+	}
+	if got := stablePeerIdentity(&second); got != "tcp://10.0.0.6" {
+		t.Fatalf("unexpected second identity %q", got)
+	}
+}
+
+func TestStablePeerIdentityNormalizesUnixSocket(t *testing.T) {
+	addr := testAddr{network: "unix", value: "@"}
+	if got := stablePeerIdentity(&addr); got != "unix://local" {
+		t.Fatalf("unexpected Unix identity %q", got)
+	}
+}
+
 func TestServerPostAlertStoresAlert(t *testing.T) {
 	store := state.NewStore()
 	srv := New(store, Options{})
@@ -173,10 +191,10 @@ func TestServerSubscribeStoresRules(t *testing.T) {
 		t.Fatalf("Subscribe error: %v", err)
 	}
 	snap := store.Snapshot()
-	if len(snap.Rules["tcp://1.2.3.4:5000"]) != 1 {
+	if len(snap.Rules["tcp://1.2.3.4"]) != 1 {
 		t.Fatalf("expected rules stored for node, got %+v", snap.Rules)
 	}
-	firewall, ok := snap.SystemFirewalls["tcp://1.2.3.4:5000"]
+	firewall, ok := snap.SystemFirewalls["tcp://1.2.3.4"]
 	if !ok {
 		t.Fatal("expected system firewall stored for node")
 	}
@@ -192,13 +210,13 @@ func TestServerSubscribeWithoutSystemFirewall(t *testing.T) {
 	store := state.NewStore()
 	srv := New(store, Options{})
 	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &testAddr{network: "tcp", value: "1.2.3.4:5001"}})
-	store.SetSystemFirewall("tcp://1.2.3.4:5001", state.SystemFirewall{Enabled: true})
+	store.SetSystemFirewall("tcp://1.2.3.4", state.SystemFirewall{Enabled: true})
 
 	if _, err := srv.Subscribe(ctx, &pb.ClientConfig{IsFirewallRunning: true}); err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
 	snap := store.Snapshot()
-	if _, ok := snap.SystemFirewalls["tcp://1.2.3.4:5001"]; ok {
+	if _, ok := snap.SystemFirewalls["tcp://1.2.3.4"]; ok {
 		t.Fatal("did not expect firewall state for older daemon payload")
 	}
 	if len(snap.Nodes) != 1 || !snap.Nodes[0].FirewallEnabled {
@@ -364,7 +382,7 @@ func TestRuleNameGeneration(t *testing.T) {
 func TestServerAskRuleTimeoutAddsRule(t *testing.T) {
 	store := state.NewStore()
 	nodeAddr := "1.2.3.4:6000"
-	nodeID := "tcp://" + nodeAddr
+	nodeID := "tcp://1.2.3.4"
 	store.SetStats(state.Stats{NodeID: nodeID})
 	settings := store.Snapshot().Settings
 	settings.PromptTimeout = 10 * time.Millisecond
