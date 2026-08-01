@@ -26,6 +26,12 @@ type RuleArchive interface {
 	Import(ctx context.Context, node state.Node) ([]state.Rule, string, error)
 }
 
+// AlertArchive stores one sanitized structured alert under a fixed private directory.
+type AlertArchive interface {
+	Directory() string
+	Export(ctx context.Context, alert state.Alert) (string, error)
+}
+
 // FirewallManager controls the system firewall on one daemon node.
 type FirewallManager interface {
 	EnableFirewall(ctx context.Context, nodeID string) error

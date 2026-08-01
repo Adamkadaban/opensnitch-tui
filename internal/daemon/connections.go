@@ -24,11 +24,39 @@ func convertConnection(conn *pb.Connection) state.Connection {
 	if args := conn.GetProcessArgs(); len(args) > 0 {
 		converted.ProcessArgs = append([]string{}, args...)
 	}
+	if env := conn.GetProcessEnv(); len(env) > 0 {
+		converted.ProcessEnv = cloneStringMap(env)
+	}
 	if checksums := conn.GetProcessChecksums(); len(checksums) > 0 {
-		converted.ProcessChecksums = make(map[string]string, len(checksums))
-		for key, value := range checksums {
-			converted.ProcessChecksums[key] = value
+		converted.ProcessChecksums = cloneStringMap(checksums)
+	}
+	if tree := conn.GetProcessTree(); len(tree) > 0 {
+		converted.ProcessTree = convertProcessTree(tree)
+	}
+	return converted
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func convertProcessTree(entries []*pb.StringInt) []state.ProcessTreeEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	converted := make([]state.ProcessTreeEntry, len(entries))
+	for i, entry := range entries {
+		if entry == nil {
+			continue
 		}
+		converted[i] = state.ProcessTreeEntry{Path: entry.GetKey(), PID: entry.GetValue()}
 	}
 	return converted
 }

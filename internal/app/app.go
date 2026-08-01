@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/adamkadaban/opensnitch-tui/internal/alertarchive"
 	"github.com/adamkadaban/opensnitch-tui/internal/config"
 	"github.com/adamkadaban/opensnitch-tui/internal/daemon"
 	"github.com/adamkadaban/opensnitch-tui/internal/keymap"
@@ -75,17 +76,22 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("configure rule archive: %w", err)
 	}
+	alertArchive, err := alertarchive.NewDefault()
+	if err != nil {
+		return fmt.Errorf("configure alert archive: %w", err)
+	}
 
 	rootModel := root.New(store, root.Options{
-		Theme:       palette,
-		KeyMap:      &km,
-		Rules:       daemonSrv,
-		RuleArchive: ruleArchive,
-		Firewall:    daemonSrv,
-		Tasks:       daemonSrv,
-		NodeConfig:  daemonSrv,
-		Prompts:     daemonSrv,
-		Settings:    settingsMgr,
+		Theme:        palette,
+		KeyMap:       &km,
+		Rules:        daemonSrv,
+		RuleArchive:  ruleArchive,
+		AlertArchive: alertArchive,
+		Firewall:     daemonSrv,
+		Tasks:        daemonSrv,
+		NodeConfig:   daemonSrv,
+		Prompts:      daemonSrv,
+		Settings:     settingsMgr,
 	})
 
 	prog := tea.NewProgram(rootModel, tea.WithAltScreen())

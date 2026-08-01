@@ -52,6 +52,7 @@ nodes: []
 ## 🧭 Usage (key hints)
 - **Navigation:** arrow keys only (no vi keys)
 - **Rules view:** `c` copy · `i` import · `o` export · `e` enable · `d` disable · `x` delete · `m` modify
+- **Alerts view:** `↑`/`↓` select · `Enter` details · `esc` back · `x` delete locally · `o` export
 - **Firewall view:** `←`/`→` select node · `↑`/`↓` select chain · `e` enable · `d` disable · `r` reload rules
 - **Tasks view:** `←`/`→` select node · `↑`/`↓` select task profile · `s` start · `x` stop
 - **Nodes view:** `↑`/`↓` select node · `Enter` details · `e` enter/exit safe config editing · arrows or `Enter`/`space` change values · `s` save · `esc` cancel/back
@@ -74,11 +75,22 @@ ${XDG_DATA_HOME:-~/.local/share}/opensnitch-tui/rules/<sanitized-node>/
 
 Directories are `0700`, files are `0600`, and exports use atomic replacement. Filenames are sanitized, while rule names inside JSON remain unchanged. Import reads only regular `.json` files from that fixed node directory and rejects links, malformed or duplicate rules, unsafe operator trees, and oversized batches. Same-name rules replace existing rules only after the daemon acknowledges the `CHANGE_RULE` batch; daemon errors leave the in-memory rule state unchanged.
 
+## 🚨 Alert archives
+
+The Alerts view exports only the selected alert to:
+
+```text
+${XDG_DATA_HOME:-~/.local/share}/opensnitch-tui/alerts/
+```
+
+Alert exports use sanitized filenames, atomic replacement, `0700` directory permissions, and `0600` files. Structured payloads are bounded; process environment values and sensitive authentication fields are redacted.
+
 ## 🗂 Repository Layout
 - `cmd/opensnitch-tui/` — CLI entrypoint
 - `internal/app/` — wiring: config, state, Bubble Tea program
 - `internal/state/` — central store, reducers, selectors
 - `internal/rulearchive/` — secure node-scoped canonical JSON import/export
+- `internal/alertarchive/` — secure bounded structured alert export
 - `internal/ui/` — router and views (dashboard, events, alerts, rules, nodes, settings, prompt)
 - `internal/daemon/` — mock/server shim for tests; notification plumbing
 - `internal/controller/` — interfaces for rule/prompt/settings managers

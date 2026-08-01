@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -492,11 +493,27 @@ func (s *Store) AddAlert(alert Alert) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.snapshot.Alerts = append([]Alert{alert}, s.snapshot.Alerts...)
+	s.snapshot.Alerts = append([]Alert{cloneAlert(alert)}, s.snapshot.Alerts...)
 	if len(s.snapshot.Alerts) > maxAlerts {
 		s.snapshot.Alerts = s.snapshot.Alerts[:maxAlerts]
 	}
 	s.notifyLocked()
+}
+
+// DeleteAlert removes the matching local alert.
+func (s *Store) DeleteAlert(selected Alert) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for idx, alert := range s.snapshot.Alerts {
+		if !reflect.DeepEqual(alert, selected) {
+			continue
+		}
+		s.snapshot.Alerts = append(s.snapshot.Alerts[:idx], s.snapshot.Alerts[idx+1:]...)
+		s.notifyLocked()
+		return true
+	}
+	return false
 }
 
 // Subscribe returns a subscription that receives a signal whenever the store mutates.
@@ -580,8 +597,42 @@ func cloneAlerts(alerts []Alert) []Alert {
 		return nil
 	}
 	copyAlerts := make([]Alert, len(alerts))
-	copy(copyAlerts, alerts)
+	for i, alert := range alerts {
+		copyAlerts[i] = cloneAlert(alert)
+	}
 	return copyAlerts
+}
+
+func cloneAlert(alert Alert) Alert {
+	if alert.Process != nil {
+		process := cloneProcess(*alert.Process)
+		alert.Process = &process
+	}
+	if alert.Connection != nil {
+		connection := cloneConnection(*alert.Connection)
+		alert.Connection = &connection
+	}
+	if alert.Rule != nil {
+		rule := cloneRule(*alert.Rule)
+		alert.Rule = &rule
+	}
+	if alert.FirewallRule != nil {
+		rule := cloneFirewallRule(*alert.FirewallRule)
+		alert.FirewallRule = &rule
+	}
+	return alert
+}
+
+func cloneProcess(process Process) Process {
+	process.Args = cloneStrings(process.Args)
+	process.Env = cloneStringMap(process.Env)
+	process.Checksums = cloneStringMap(process.Checksums)
+	if len(process.ProcessTree) > 0 {
+		process.ProcessTree = append([]ProcessTreeEntry(nil), process.ProcessTree...)
+	} else {
+		process.ProcessTree = nil
+	}
+	return process
 }
 
 func cloneRulesMap(rules map[string][]Rule) map[string][]Rule {
@@ -770,19 +821,33 @@ func clonePrompt(prompt Prompt) Prompt {
 }
 
 func cloneConnection(conn Connection) Connection {
-	if len(conn.ProcessArgs) > 0 {
-		args := make([]string, len(conn.ProcessArgs))
-		copy(args, conn.ProcessArgs)
-		conn.ProcessArgs = args
-	}
-	if len(conn.ProcessChecksums) > 0 {
-		checksums := make(map[string]string, len(conn.ProcessChecksums))
-		for key, value := range conn.ProcessChecksums {
-			checksums[key] = value
-		}
-		conn.ProcessChecksums = checksums
+	conn.ProcessArgs = cloneStrings(conn.ProcessArgs)
+	conn.ProcessEnv = cloneStringMap(conn.ProcessEnv)
+	conn.ProcessChecksums = cloneStringMap(conn.ProcessChecksums)
+	if len(conn.ProcessTree) > 0 {
+		conn.ProcessTree = append([]ProcessTreeEntry(nil), conn.ProcessTree...)
+	} else {
+		conn.ProcessTree = nil
 	}
 	return conn
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return append([]string(nil), values...)
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (s *Store) upsertNodeLocked(node Node) {

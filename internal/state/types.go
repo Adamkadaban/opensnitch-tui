@@ -135,15 +135,90 @@ type StatBucket struct {
 	Value uint64
 }
 
+type AlertPriority string
+
+const (
+	AlertPriorityLow    AlertPriority = "LOW"
+	AlertPriorityMedium AlertPriority = "MEDIUM"
+	AlertPriorityHigh   AlertPriority = "HIGH"
+)
+
+type AlertType string
+
+const (
+	AlertTypeError   AlertType = "ERROR"
+	AlertTypeWarning AlertType = "WARNING"
+	AlertTypeInfo    AlertType = "INFO"
+)
+
+type AlertAction string
+
+const (
+	AlertActionNone      AlertAction = "NONE"
+	AlertActionShowAlert AlertAction = "SHOW_ALERT"
+	AlertActionSaveToDB  AlertAction = "SAVE_TO_DB"
+)
+
+type AlertWhat string
+
+const (
+	AlertWhatGeneric     AlertWhat = "GENERIC"
+	AlertWhatProcMonitor AlertWhat = "PROC_MONITOR"
+	AlertWhatFirewall    AlertWhat = "FIREWALL"
+	AlertWhatConnection  AlertWhat = "CONNECTION"
+	AlertWhatRule        AlertWhat = "RULE"
+	AlertWhatNetlink     AlertWhat = "NETLINK"
+	AlertWhatKernelEvent AlertWhat = "KERNEL_EVENT"
+)
+
+type AlertPayloadKind string
+
+const (
+	AlertPayloadNone       AlertPayloadKind = ""
+	AlertPayloadText       AlertPayloadKind = "text"
+	AlertPayloadProcess    AlertPayloadKind = "process"
+	AlertPayloadConnection AlertPayloadKind = "connection"
+	AlertPayloadRule       AlertPayloadKind = "rule"
+	AlertPayloadFirewall   AlertPayloadKind = "firewall_rule"
+)
+
 // Alert represents a daemon alert entry shown in the UI.
 type Alert struct {
-	ID        string
-	NodeID    string
-	Text      string
-	Priority  string
-	Type      string
-	Action    string
-	CreatedAt time.Time
+	ID           string
+	NodeID       string
+	Text         string
+	Priority     AlertPriority
+	Type         AlertType
+	Action       AlertAction
+	What         AlertWhat
+	PayloadKind  AlertPayloadKind
+	Process      *Process
+	Connection   *Connection
+	Rule         *Rule
+	FirewallRule *FirewallRule
+	CreatedAt    time.Time
+}
+
+type Process struct {
+	PID         uint64
+	PPID        uint64
+	UID         uint64
+	Comm        string
+	Path        string
+	Args        []string
+	Env         map[string]string
+	CWD         string
+	Checksums   map[string]string
+	IOReads     uint64
+	IOWrites    uint64
+	NetReads    uint64
+	NetWrites   uint64
+	ProcessTree []ProcessTreeEntry
+}
+
+type ProcessTreeEntry struct {
+	Path string
+	PID  uint32
 }
 
 // Rule represents a daemon rule entry.
@@ -254,7 +329,9 @@ type Connection struct {
 	ProcessPath      string
 	ProcessCWD       string
 	ProcessArgs      []string
+	ProcessEnv       map[string]string
 	ProcessChecksums map[string]string
+	ProcessTree      []ProcessTreeEntry
 }
 
 // Prompt captures a pending AskRule request from a daemon node.
