@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -259,6 +260,36 @@ func TestRulesImportAndExportRunAsynchronously(t *testing.T) {
 	}
 	if out := view.View(); !strings.Contains(out, "Exported 1 rule(s)") || !strings.Contains(out, archive.path) {
 		t.Fatalf("expected export success feedback, got %q", out)
+	}
+}
+
+func TestRulesImportErrorReportsPartialProgress(t *testing.T) {
+	store := state.NewStore()
+	node := state.Node{ID: "node-1", Name: "alpha", Status: state.NodeStatusReady}
+	store.SetNodes([]state.Node{node})
+	ctrl := &fakeRuleController{
+		err: errors.New(`rule 2 "second" failed after 1 of 2 rules applied: rule rejected`),
+	}
+	archive := &fakeRuleArchive{
+		path: "/safe/archive/alpha-1234",
+		imported: []state.Rule{
+			{Name: "first", Action: "allow", Duration: "always", Operator: state.RuleOperator{Type: "simple"}},
+			{Name: "second", Action: "deny", Duration: "always", Operator: state.RuleOperator{Type: "simple"}},
+		},
+	}
+	view := New(store, theme.New(theme.Options{}), ctrl, archive)
+	view.SetSize(120, 40)
+
+	_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd == nil {
+		t.Fatal("expected asynchronous import command")
+	}
+	view.Update(cmd())
+	out := view.View()
+	if !strings.Contains(out, "Import failed for alpha") ||
+		!strings.Contains(out, `rule 2 "second"`) ||
+		!strings.Contains(out, "1 of 2 rules applied") {
+		t.Fatalf("expected partial import progress feedback, got %q", out)
 	}
 }
 
