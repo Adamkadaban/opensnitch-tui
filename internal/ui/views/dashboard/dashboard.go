@@ -26,6 +26,7 @@ const (
 	minStatCardWidth    = 24
 	minTopCardWidth     = 28
 	minTrafficCardWidth = 32
+	maxTopBuckets       = 5
 )
 
 // New creates a dashboard view backed by the provided store.
@@ -62,13 +63,14 @@ func (m *Model) View() string {
 	insights := m.renderTraffic(stats, trafficWidth)
 	topColumns := cardColumns(m.width, minTopCardWidth)
 	topWidth := max(1, m.width/topColumns)
+	topLimit := m.topBucketLimit(stats, statColumns, topColumns)
 	secondary := joinCardGrid([]string{
-		m.renderTopList("Top destinations", stats.TopDestHosts, topWidth, topColumns < 4),
-		m.renderTopList("Top ports", stats.TopDestPorts, topWidth, topColumns < 4),
-		m.renderTopList("Top executables", stats.TopExecutables, topWidth, topColumns < 4),
-		m.renderTopList("Top users", stats.TopUsers, topWidth, topColumns < 4),
+		m.renderTopList("Top destinations", limitBuckets(stats.TopDestHosts, topLimit), topWidth, topColumns < 4),
+		m.renderTopList("Top ports", limitBuckets(stats.TopDestPorts, topLimit), topWidth, topColumns < 4),
+		m.renderTopList("Top executables", limitBuckets(stats.TopExecutables, topLimit), topWidth, topColumns < 4),
+		m.renderTopList("Top users", limitBuckets(stats.TopUsers, topLimit), topWidth, topColumns < 4),
 	}, topColumns)
-	meta := m.theme.Subtle.Render(m.metaLine(stats))
+	meta := m.theme.Subtle.Render(m.metaLine(snapshot))
 	body := lipgloss.JoinVertical(lipgloss.Left, row, insights, secondary, meta)
 
 	return m.theme.Body.Width(max(1, m.width)).Height(max(3, m.height)).Render(body)
@@ -209,10 +211,65 @@ func (m *Model) cardStyle(compact bool) lipgloss.Style {
 	return m.theme.Card
 }
 
-func (m *Model) metaLine(stats state.Stats) string {
-	if stats.UpdatedAt.IsZero() {
-		return "Waiting for daemon telemetry"
+func (m *Model) metaLine(snapshot state.Snapshot) string {
+	ready := readyNodes(snapshot.Nodes)
+	if len(ready) == 0 {
+		if len(snapshot.Nodes) == 0 {
+			return "Waiting for daemon telemetry"
+		}
+		return "No ready daemons · Telemetry paused until reconnect"
 	}
-	node := util.Fallback(stats.NodeName, util.Fallback(stats.NodeID, "unknown node"))
-	return fmt.Sprintf("Node %s · Daemon %s · Updated %s", node, util.Fallback(stats.DaemonVersion, "unknown"), util.RelativeTime(stats.UpdatedAt))
+	if snapshot.Stats.UpdatedAt.IsZero() {
+		if len(ready) == 1 {
+			return "1 daemon ready · Waiting for telemetry"
+		}
+		return fmt.Sprintf("%d daemons ready · Waiting for telemetry", len(ready))
+	}
+	if len(ready) > 1 {
+		return fmt.Sprintf("%d daemons aggregated · Updated %s", len(ready), util.RelativeTime(snapshot.Stats.UpdatedAt))
+	}
+	stats := snapshot.Stats
+	node := util.Fallback(stats.NodeName, util.Fallback(ready[0].Name, util.Fallback(stats.NodeID, ready[0].ID)))
+	version := util.Fallback(stats.DaemonVersion, util.Fallback(ready[0].Version, "unknown"))
+	return fmt.Sprintf("Node %s · Daemon %s · Updated %s", node, version, util.RelativeTime(stats.UpdatedAt))
+}
+
+func readyNodes(nodes []state.Node) []state.Node {
+	ready := make([]state.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Status == state.NodeStatusReady {
+			ready = append(ready, node)
+		}
+	}
+	return ready
+}
+
+func (m *Model) topBucketLimit(stats state.Stats, statColumns, topColumns int) int {
+	if m.height <= 0 {
+		return maxTopBuckets
+	}
+	statRows := (4 + statColumns - 1) / statColumns
+	statCardHeight := 6
+	if statColumns < 4 {
+		statCardHeight = 4
+	}
+	trafficHeight := 8
+	if stats.Accepted+stats.Dropped+stats.Ignored == 0 {
+		trafficHeight++
+	}
+	topRows := (4 + topColumns - 1) / topColumns
+	topCardBase := 5
+	if topColumns < 4 {
+		topCardBase = 3
+	}
+	available := m.height - 2 - statRows*statCardHeight - trafficHeight - 1
+	limit := (available/topRows - topCardBase) / 2
+	return min(max(1, limit), maxTopBuckets)
+}
+
+func limitBuckets(buckets []state.StatBucket, limit int) []state.StatBucket {
+	if limit <= 0 || len(buckets) <= limit {
+		return buckets
+	}
+	return buckets[:limit]
 }

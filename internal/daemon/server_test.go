@@ -85,6 +85,41 @@ func TestServerAskRuleCancelWhilePaused(t *testing.T) {
 	}
 }
 
+func TestServerPingAggregatesAndReplacesNodeStats(t *testing.T) {
+	store := state.NewStore()
+	srv := New(store, Options{})
+	first := peer.NewContext(context.Background(), &peer.Peer{
+		Addr: &testAddr{network: "tcp", value: "10.0.0.1:5000"},
+	})
+	second := peer.NewContext(context.Background(), &peer.Peer{
+		Addr: &testAddr{network: "tcp", value: "10.0.0.2:5000"},
+	})
+
+	if _, err := srv.Ping(first, &pb.PingRequest{
+		Id: 1, Stats: &pb.Statistics{Connections: 10},
+	}); err != nil {
+		t.Fatalf("first Ping error: %v", err)
+	}
+	if _, err := srv.Ping(first, &pb.PingRequest{
+		Id: 2, Stats: &pb.Statistics{Connections: 12},
+	}); err != nil {
+		t.Fatalf("replacement Ping error: %v", err)
+	}
+	if _, err := srv.Ping(second, &pb.PingRequest{
+		Id: 3, Stats: &pb.Statistics{Connections: 20},
+	}); err != nil {
+		t.Fatalf("second-node Ping error: %v", err)
+	}
+
+	snapshot := store.Snapshot()
+	if snapshot.Stats.Connections != 32 {
+		t.Fatalf("expected replacement aggregate 32, got %d", snapshot.Stats.Connections)
+	}
+	if len(snapshot.StatsByNode) != 2 {
+		t.Fatalf("expected two per-node stats entries, got %d", len(snapshot.StatsByNode))
+	}
+}
+
 func TestParseListenAddr(t *testing.T) {
 	tests := []struct {
 		input   string
@@ -267,6 +302,7 @@ func TestServerDeleteRuleRemovesState(t *testing.T) {
 
 func TestServerResolvePromptAddsRule(t *testing.T) {
 	store := state.NewStore()
+	store.SetNodes([]state.Node{{ID: "node-1", Status: state.NodeStatusReady}})
 	store.SetStats(state.Stats{NodeID: "node-1"})
 	srv := New(store, Options{})
 	req := &promptRequest{
@@ -383,6 +419,7 @@ func TestServerAskRuleTimeoutAddsRule(t *testing.T) {
 	store := state.NewStore()
 	nodeAddr := "1.2.3.4:6000"
 	nodeID := "tcp://1.2.3.4"
+	store.SetNodes([]state.Node{{ID: nodeID, Status: state.NodeStatusReady}})
 	store.SetStats(state.Stats{NodeID: nodeID})
 	settings := store.Snapshot().Settings
 	settings.PromptTimeout = 10 * time.Millisecond
