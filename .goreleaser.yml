@@ -34,11 +34,47 @@ builds:
     ldflags:
       - -s -w
 
+  - id: linux-amd64-portable
+    main: ./cmd/opensnitch-tui
+    binary: opensnitch-tui
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - no_yara
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+
 archives:
-  - id: release
+  - id: linux-amd64-yara
+    ids:
+      - linux-amd64-yara
     formats:
       - tar.gz
-    name_template: '{{ .ProjectName }}_{{ .Version }}_linux_{{ if eq .Arch "amd64" }}x86_64_yara{{ else }}{{ .Arch }}_portable{{ end }}'
+    name_template: "{{ .ProjectName }}_{{ .Version }}_linux_x86_64_yara"
+    files:
+      - LICENSE
+      - README.md
+
+  - id: linux-amd64-portable
+    ids:
+      - linux-amd64-portable
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_linux_x86_64_portable"
+    files:
+      - LICENSE
+      - README.md
+
+  - id: linux-arm64-portable
+    ids:
+      - linux-arm64-portable
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_linux_arm64_portable"
     files:
       - LICENSE
       - README.md
