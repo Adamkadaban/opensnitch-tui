@@ -1,149 +1,146 @@
+<h1 align="center">OpenSnitch TUI</h1>
+
+<p align="center">
+  A keyboard-first terminal control center for the OpenSnitch application firewall.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Adamkadaban/opensnitch-tui/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Adamkadaban/opensnitch-tui?include_prereleases&sort=semver"></a>
+  <a href="https://github.com/Adamkadaban/opensnitch-tui/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Adamkadaban/opensnitch-tui/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
+  <img alt="Made with vibes" src="https://img.shields.io/badge/made_with-vibes-ff69b4">
+</p>
+
 > [!WARNING]
-> This project is entirely vibecoded. Use at your own risk
+> This project was built with substantial AI assistance. Review firewall changes carefully and test on a disposable machine before production use.
 
-# OpenSnitch TUI
+<p align="center">
+  <a href="https://asciinema.org/a/HqPc46dL8TbHQG7YgiR7g02ia">
+    <img alt="OpenSnitch TUI demo" src="https://asciinema.org/a/HqPc46dL8TbHQG7YgiR7g02ia.svg" width="760">
+  </a>
+</p>
 
-TUI for [OpenSnitch](https://github.com/evilsocket/opensnitch) that includes a yara scanner.
+## What it does
 
+- Handles live allow, deny, and reject prompts with timed and composite rules.
+- Aggregates dashboard statistics from multiple OpenSnitch daemons.
+- Manages rules, firewall state, daemon tasks, alerts, and safe node settings.
+- Imports and exports private node-scoped rule archives.
+- Inspects processes and optionally scans executables with YARA.
+- Supports narrow terminals, deterministic screenshots, and keyboard-only navigation.
 
-## 📽 Demo
-[![asciicast](https://asciinema.org/a/HqPc46dL8TbHQG7YgiR7g02ia.svg)](https://asciinema.org/a/HqPc46dL8TbHQG7YgiR7g02ia)
+OpenSnitch `v1.8.0` is the primary compatibility target.
 
+## Quick start
 
+Close the desktop OpenSnitch UI first so it does not own `/tmp/osui.sock`, then:
 
----
-
-## 🧰 Requirements
-- **Go** `1.24+`
-- **golangci-lint** `>= 1.56` (for `make lint`)
-- (Optional) **protoc** + `protoc-gen-go`/`protoc-gen-go-grpc` if regenerating stubs from `opensnitch/proto/ui.proto`
-- (Optional) **YARA** support: cgo + libyara (e.g., `brew install yara`, `apt-get install libyara-dev`). Disable with `-tags no_yara`.
-
-## 🚀 Quickstart
 ```bash
-make build   # builds ./bin/opensnitch-tui
-make lint    # golangci-lint run
-make test    # go test ./...
-
-# Run the TUI (pass your flags via ARGS)
-make run ARGS="-config ~/.config/opensnitch-tui/config.yaml"
+make build
+./bin/opensnitch-tui
 ```
-Common flags:
-- `-config PATH` — YAML config (default `~/.config/opensnitch-tui/config.yaml`)
-- `-theme light|dark|auto` — session theme override
-- `-listen ADDRESS` — daemon listener (default `unix:///tmp/osui.sock`; TCP addresses remain supported)
 
-## ⚙️ Configuration
-Default location: `~/.config/opensnitch-tui/config.yaml`
+The daemon normally reconnects automatically. If it does not:
+
+```bash
+sudo systemctl restart opensnitch.service
+```
+
+For installation, release variants, daemon configuration, YARA, and multi-node setup, see **[docs/SETUP.md](docs/SETUP.md)**.
+
+## Navigation
+
+Use `Tab` and `Shift+Tab` to switch views. Navigation uses arrow keys only; there are no vi bindings.
+
+| View | Main controls |
+|---|---|
+| Dashboard | Aggregated node telemetry |
+| Events | Arrows, PgUp/PgDn, Home/End |
+| Alerts | `Enter` details, `x` delete locally, `o` export |
+| Rules | `c` copy, `i` import, `o` export, `e` enable, `d` disable, `x` delete, `m` modify |
+| Firewall | Left/right node, up/down chain, `e` enable, `d` disable, `r` reload |
+| Tasks | Left/right node, up/down monitor, `s` start, `x` stop |
+| Nodes | `Enter` details, `e` edit safe settings, `s` save, `Esc` cancel/back |
+| Settings | Arrows and Enter/Space |
+| Prompt | `a` allow, `d` deny, `r` reject, `v` advanced matches, `i` inspect |
+
+## What are Tasks?
+
+Tasks are live telemetry streams running on the selected OpenSnitch daemon. They do not enable firewall functionality or update another view.
+
+- **Node monitor:** uptime, load, memory, swap, and process counts.
+- **Sockets monitor:** socket totals grouped by protocol, family, and state.
+- **PID monitor:** reserved for a future safe PID-selection flow.
+
+After pressing `s`, the selected profile changes from `WAITING` to `RUNNING` when its first update arrives. Output appears directly in that profile's detail panel. If no update arrives within 15 seconds, the TUI stops the stream and displays troubleshooting guidance.
+
+## Configuration
+
+The optional TUI configuration lives at:
+
+```text
+~/.config/opensnitch-tui/config.yaml
+```
 
 ```yaml
 theme: midnight
 default_prompt_action: deny
-default_prompt_duration: always
+default_prompt_duration: once
 default_prompt_target: process.path
 prompt_timeout_seconds: 300
 alerts_interrupt: false
 pause_prompt_on_inspect: true
-yara_rule_dir: /opt/yara_rules
-yara_enabled: true
+yara_rule_dir: ""
+yara_enabled: false
 nodes: []
 ```
 
-## 🧭 Usage (key hints)
-- **Navigation:** arrow keys only (no vi keys)
-- **Rules view:** `c` copy · `i` import · `o` export · `e` enable · `d` disable · `x` delete · `m` modify
-- **Alerts view:** `↑`/`↓` select · `Enter` details · `esc` back · `x` delete locally · `o` export
-- **Firewall view:** `←`/`→` select node · `↑`/`↓` select chain · `e` enable · `d` disable · `r` reload rules
-- **Tasks view:** `←`/`→` select node · `↑`/`↓` select task profile · `s` start · `x` stop
-- **Nodes view:** `↑`/`↓` select node · `Enter` details · `e` enter/exit safe config editing · arrows or `Enter`/`space` change values · `s` save · `esc` cancel/back
-- **Prompt dialog:** arrows to move focus/choices; `a` allow · `d` deny · `r` reject · `v` advanced matches · `space`/`Enter` toggle advanced conditions
-- **Tables:** arrows to move; PgUp/PgDn/Home/End for paging
-
-## Tasks
-
-Tasks are remote OpenSnitch daemon telemetry streams; starting one does not enable firewall features or change other tabs. Use `←`/`→` to select a node, `↑`/`↓` to select a profile, `s` to start, and `x` to stop. Updates and the last-update time appear in the selected profile details.
-
-- **Node monitor:** host uptime, load, memory, swap, and process-count summaries.
-- **Sockets monitor:** socket totals grouped by protocol, family, and state; process details are not displayed.
-- **PID monitor:** unavailable until the TUI provides a safe PID-selection flow; free-form PID input is intentionally disabled.
-
-The first update is expected after the 5-second interval. If none arrives within 15 seconds, the TUI stops the stream and reports that the task may be unsupported or disabled. Confirm OpenSnitch v1.8 compatibility, then check daemon task configuration and logs.
-
-## 🔍 YARA scanning (optional)
-- **Build requirements:** cgo enabled + **libyara** installed (`brew install yara` · `apt-get install libyara-dev`). Uses `github.com/hillu/go-yara/v4`.
-- **Enable/disable:** set `yara_enabled: true|false` in config or toggle in **Settings → Security**. Default: `false`.
-- **Rule directory:** set `yara_rule_dir: /path/to/yara_rules` (files ending in `.yar` / `.yara`). Rules are compiled once per directory and cached.
-- **Disable at build time:** `go build -tags no_yara` (or `CGO_ENABLED=0`) uses a stub; YARA features will surface `yara not available`.
-
-## 📦 Rule archives
-
-The Rules view imports and exports only the currently selected, connected node. Archives use canonical, indented JSON with one rule per file under:
+Common flags:
 
 ```text
-${XDG_DATA_HOME:-~/.local/share}/opensnitch-tui/rules/<sanitized-node>/
+-config PATH
+-theme midnight|canopy|dawn
+-listen unix:///tmp/osui.sock
 ```
 
-Directories are `0700`, files are `0600`, and exports stage and fsync a complete node generation before replacing the prior archive with rollback protection. Filenames are sanitized, while rule names inside JSON remain unchanged. Import reads only regular `.json` files from that fixed node directory and rejects links, malformed or duplicate rules, unsafe operator trees, and oversized batches. Nested `LIST` operators are rejected because OpenSnitch v1.8 only preserves immediate list children. The complete batch is validated before sending, then each rule is applied in archive order with its own daemon acknowledgement. Same-name rules are replaced immediately after acknowledgement; if a later rule fails, earlier acknowledged changes remain and the error reports partial progress.
-
-## 🚨 Alert archives
-
-The Alerts view exports only the selected alert to:
-
-```text
-${XDG_DATA_HOME:-~/.local/share}/opensnitch-tui/alerts/
-```
-
-Alert exports use sanitized filenames, atomic replacement, `0700` directory permissions, and `0600` files. Structured payloads are bounded; process environment values and sensitive authentication fields are redacted.
-
-## 🗂 Repository Layout
-- `cmd/opensnitch-tui/` — CLI entrypoint
-- `internal/app/` — wiring: config, state, Bubble Tea program
-- `internal/state/` — central store, reducers, selectors
-- `internal/rulearchive/` — secure node-scoped canonical JSON import/export
-- `internal/alertarchive/` — secure bounded structured alert export
-- `internal/ui/` — router and views (dashboard, events, alerts, rules, nodes, settings, prompt)
-- `internal/daemon/` — mock/server shim for tests; notification plumbing
-- `internal/controller/` — interfaces for rule/prompt/settings managers
-- `internal/pb/protocol/` — generated gRPC/proto stubs (from `opensnitch/proto/ui.proto`)
-- `internal/config/` — YAML config loader
-- `internal/theme/` — lipgloss styles
-- `internal/util/` — misc helpers (ANSI-safe slicing, padding, display names)g
-
-## 🛠 Build & Dev Workflow
-- **Format & lint:** `gofmt -w` (IDE/Go tools) and `make lint`
-- **Tests:** `make test` (aliases `go test ./...`)
-- **Regenerating protos:** from repo root, run `make -C opensnitch/proto` (requires `protoc` + Go plugins)
-
-## 📦 Releases
-
-Version tags matching `v*` publish checksummed Linux archives:
-
-- `linux/amd64` with YARA support
-- `linux/arm64` portable build using the `no_yara` tag
-
-The release workflow runs module verification and tests before publishing. Create a release with:
+TCP listeners remain available for trusted private multi-node networks:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+./bin/opensnitch-tui -listen 0.0.0.0:50051
 ```
 
-## 🔍 Testing Notes
-- Keep **unit tests** green (`go test ./...`)
-- Add table/render tests under `internal/ui/views/...` when altering layout/keys
-- Use `make capture-ui` to record deterministic screenshots before and after navigation inputs
-- Visual captures require [`tmux`](https://github.com/tmux/tmux) and [`freeze`](https://github.com/charmbracelet/freeze)
-- Captures are written under ignored `artifacts/tui-captures/`; never commit captures from a real daemon or production environment
+## Releases
 
-### Real OpenSnitch v1.8 integration
+Version tags publish checksummed Linux archives:
 
-> [!CAUTION]
-> Run this only on a disposable Linux VM. It temporarily stops and starts the OpenSnitch systemd service, owns `/tmp/osui.sock` during the test, reloads the firewall's currently reported rules, and allows one `curl` request to `https://example.com`. It does not disable the firewall or create a persistent allow rule.
+| Artifact | Linking | YARA |
+|---|---|---|
+| `linux_x86_64_portable` | Static | No |
+| `linux_x86_64_yara` | Dynamic | Yes |
+| `linux_arm64_portable` | Static | No |
 
-With OpenSnitch v1.8.0 installed and configured for its default `unix:///tmp/osui.sock` UI address:
+Portable builds are single binaries and do not require `libyara`.
+
+## Development
+
+```bash
+make build
+make test
+go test -race ./...
+make lint
+make capture-ui
+```
+
+`make capture-ui` requires `tmux` and [Freeze](https://github.com/charmbracelet/freeze). Captures are written to ignored `artifacts/tui-captures/`.
+
+The real daemon integration test is intentionally restricted to disposable Linux machines:
 
 ```bash
 sudo make test-opensnitch-integration
 ```
 
-The harness detects `opensnitch.service` or `opensnitchd.service`; set `OPENSNITCH_SERVICE` only when the packaged unit uses another name. Normal `go test ./...` runs skip the real-service test without requiring root, systemd, or `curl`.
+See **[docs/SETUP.md](docs/SETUP.md)** for the safety notes.
+
+## License
+
+[GNU General Public License v3.0](LICENSE)
