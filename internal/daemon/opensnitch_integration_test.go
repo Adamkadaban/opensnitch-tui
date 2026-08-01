@@ -208,7 +208,7 @@ func startNodeMonitor(
 	node state.Node,
 ) controller.TaskStream {
 	t.Helper()
-	request := controller.NewNodeMonitorTask(node.Name, "250ms")
+	request := controller.NewNodeMonitorTask(nodeMonitorTarget(node), "250ms")
 	var stream controller.TaskStream
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()

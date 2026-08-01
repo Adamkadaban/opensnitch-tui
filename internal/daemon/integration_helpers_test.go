@@ -33,6 +33,16 @@ func executablePathsMatch(got, want string) bool {
 	return resolve(got) == resolve(want)
 }
 
+func nodeMonitorTarget(node state.Node) string {
+	if strings.HasPrefix(node.ID, "unix://") {
+		return "unix:/local"
+	}
+	if node.Address != "" {
+		return strings.TrimPrefix(node.Address, "tcp://")
+	}
+	return strings.TrimPrefix(node.ID, "tcp://")
+}
+
 func validateNodeMonitorUpdate(data []byte) error {
 	var update map[string]any
 	if err := json.Unmarshal(data, &update); err != nil {
@@ -133,6 +143,22 @@ func TestExecutablePathsMatch(t *testing.T) {
 	}
 	if executablePathsMatch("", "/usr/bin/curl") {
 		t.Fatal("did not expect an empty path to match")
+	}
+}
+
+func TestNodeMonitorTarget(t *testing.T) {
+	tests := []struct {
+		node state.Node
+		want string
+	}{
+		{node: state.Node{ID: "unix://@", Name: "local"}, want: "unix:/local"},
+		{node: state.Node{ID: "tcp://10.0.0.2:50051", Address: "10.0.0.2:50051"}, want: "10.0.0.2:50051"},
+		{node: state.Node{ID: "tcp://10.0.0.3:50051"}, want: "10.0.0.3:50051"},
+	}
+	for _, test := range tests {
+		if got := nodeMonitorTarget(test.node); got != test.want {
+			t.Fatalf("nodeMonitorTarget(%+v) = %q, want %q", test.node, got, test.want)
+		}
 	}
 }
 
