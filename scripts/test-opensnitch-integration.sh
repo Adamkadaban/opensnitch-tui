@@ -74,6 +74,12 @@ cleanup() {
 [[ $(id -u) -eq 0 ]] || fail "run this integration harness with sudo/root"
 [[ $(uname -s) == Linux ]] || fail "this integration harness requires Linux"
 
+export HOME=${HOME:-/root}
+export GOPATH=${GOPATH:-"$HOME/go"}
+export GOMODCACHE=${GOMODCACHE:-"$GOPATH/pkg/mod"}
+export GOCACHE=${GOCACHE:-"$HOME/.cache/go-build"}
+mkdir -p -- "$GOMODCACHE" "$GOCACHE"
+
 go_bin=${GO:-go}
 for tool in "$go_bin" curl systemctl journalctl timeout; do
 	require_tool "$tool"
