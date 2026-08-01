@@ -21,6 +21,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/nodes"
 	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/rules"
 	settingsview "github.com/adamkadaban/opensnitch-tui/internal/ui/views/settings"
+	"github.com/adamkadaban/opensnitch-tui/internal/ui/views/tasks"
 	"github.com/adamkadaban/opensnitch-tui/internal/util"
 )
 
@@ -30,6 +31,7 @@ type Options struct {
 	KeyMap   *keymap.Global
 	Rules    controller.RuleManager
 	Firewall controller.FirewallManager
+	Tasks    controller.TaskManager
 	Prompts  controller.PromptManager
 	Settings controller.SettingsManager
 }
@@ -64,6 +66,7 @@ func New(store *state.Store, opts Options) *Model {
 		state.ViewEvents:    events.New(store, opts.Theme),
 		state.ViewRules:     rules.New(store, opts.Theme, opts.Rules),
 		state.ViewFirewall:  firewall.New(store, opts.Theme, opts.Firewall),
+		state.ViewTasks:     tasks.New(store, opts.Theme, opts.Tasks),
 		state.ViewNodes:     nodes.New(store, opts.Theme),
 		state.ViewSettings:  settingsview.New(store, opts.Theme, opts.Settings),
 	}
@@ -111,7 +114,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case storeChangeMsg:
 		m.onStoreChanged()
-		return m, waitForStoreChanges(m.sub)
+		cmds := []tea.Cmd{waitForStoreChanges(m.sub)}
+		for kind, routedView := range m.views {
+			updated, cmd := routedView.Update(msg)
+			if nextView, ok := updated.(view.Model); ok {
+				m.views[kind] = nextView
+			}
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -120,6 +131,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, m.keymap.Quit):
+			m.closeSubscription()
+			m.closeViews()
 			return m, tea.Quit
 		case key.Matches(msg, m.keymap.NextView):
 			m.cycle(1)
@@ -129,6 +142,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.QuitMsg:
 		m.closeSubscription()
+		m.closeViews()
 	}
 
 	activeView := m.activeView()
@@ -137,7 +151,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.views[m.active] = nextView
 	}
 
-	return m, cmd
+	cmds := []tea.Cmd{cmd}
+	for kind, routedView := range m.views {
+		if kind == m.active {
+			continue
+		}
+		handler, ok := routedView.(view.MessageHandler)
+		if !ok || !handler.HandlesMessage(msg) {
+			continue
+		}
+		updated, routedCmd := routedView.Update(msg)
+		if nextView, ok := updated.(view.Model); ok {
+			m.views[kind] = nextView
+		}
+		cmds = append(cmds, routedCmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m *Model) View() string {
@@ -183,6 +213,14 @@ func (m *Model) closeSubscription() {
 	if m.sub != nil {
 		m.sub.Close()
 		m.sub = nil
+	}
+}
+
+func (m *Model) closeViews() {
+	for _, routedView := range m.views {
+		if closer, ok := routedView.(view.Closer); ok {
+			closer.Close()
+		}
 	}
 }
 

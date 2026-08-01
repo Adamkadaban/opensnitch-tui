@@ -76,6 +76,7 @@ func Run(ctx context.Context, opts Options) error {
 		KeyMap:   &km,
 		Rules:    daemonSrv,
 		Firewall: daemonSrv,
+		Tasks:    daemonSrv,
 		Prompts:  daemonSrv,
 		Settings: settingsMgr,
 	})
