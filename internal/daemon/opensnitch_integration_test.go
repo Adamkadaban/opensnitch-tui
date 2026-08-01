@@ -15,7 +15,10 @@ import (
 	"time"
 
 	"github.com/adamkadaban/opensnitch-tui/internal/controller"
+	pb "github.com/adamkadaban/opensnitch-tui/internal/pb/protocol"
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const integrationSocketPath = "/tmp/osui.sock"
@@ -106,6 +109,8 @@ func TestOpenSnitchV18Integration(t *testing.T) {
 		firewall.Version,
 	)
 
+	postStructuredIntegrationAlert(t, store)
+
 	firstTask := startNodeMonitor(serverCtx, t, server, node)
 	stopTask(t, server, firstTask)
 
@@ -118,6 +123,7 @@ func TestOpenSnitchV18Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RELOAD_FW_RULES was not acknowledged: %v", err)
 	}
+
 	afterReload, ok := store.SystemFirewall(node.ID)
 	if !ok {
 		t.Fatal("system firewall state disappeared after reload")
@@ -146,6 +152,53 @@ func TestOpenSnitchV18Integration(t *testing.T) {
 	}
 	assertTaskStreamClean(t, firstTask)
 	assertTaskStreamClean(t, secondTask)
+}
+
+func postStructuredIntegrationAlert(t *testing.T, store *state.Store) {
+	t.Helper()
+	conn, err := grpc.NewClient(
+		"unix://"+integrationSocketPath,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("create integration alert client: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := pb.NewUIClient(conn)
+	_, err = client.PostAlert(ctx, &pb.Alert{
+		Id:       4242,
+		Priority: pb.Alert_HIGH,
+		Type:     pb.Alert_WARNING,
+		Action:   pb.Alert_SHOW_ALERT,
+		What:     pb.Alert_PROC_MONITOR,
+		Data: &pb.Alert_Proc{Proc: &pb.Process{
+			Pid:  4242,
+			Ppid: 1,
+			Uid:  1000,
+			Comm: "integration-probe",
+			Path: "/usr/bin/integration-probe",
+			Args: []string{"--token", "do-not-render"},
+			Env:  map[string]string{"SECRET_TOKEN": "do-not-export"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("post structured integration alert: %v", err)
+	}
+
+	alerts := store.Snapshot().Alerts
+	if len(alerts) == 0 {
+		t.Fatal("structured integration alert was not stored")
+	}
+	alert := alerts[0]
+	if alert.ID != "4242" || alert.PayloadKind != state.AlertPayloadProcess || alert.Process == nil {
+		t.Fatalf("unexpected structured alert: %+v", alert)
+	}
+	if alert.Process.Env["SECRET_TOKEN"] != "do-not-export" {
+		t.Fatalf("structured alert process payload was not retained: %+v", alert.Process)
+	}
 }
 
 func waitForIntegrationSocket(

@@ -183,13 +183,14 @@ func TestStoreSubscriptionReceivesNotifications(t *testing.T) {
 
 func TestStoreAddAlert(t *testing.T) {
 	store := NewStore()
-	store.AddAlert(Alert{ID: "a1", Text: "one"})
-	store.AddAlert(Alert{ID: "a2", Text: "two"})
+	store.AddAlert(Alert{ID: "a1", Text: "one", PayloadKind: AlertPayloadText})
+	store.AddAlert(Alert{ID: "a2", Text: "two", PayloadKind: AlertPayloadText})
 
 	snap := store.Snapshot()
 	if len(snap.Alerts) != 2 {
 		t.Fatalf("expected two alerts, got %d", len(snap.Alerts))
 	}
+
 	if snap.Alerts[0].ID != "a2" || snap.Alerts[1].ID != "a1" {
 		t.Fatalf("alerts order unexpected: %#v", snap.Alerts)
 	}
@@ -205,6 +206,81 @@ func TestStoreAddAlert(t *testing.T) {
 		if alert.ID == "a1" || alert.ID == "a2" {
 			t.Fatalf("expected oldest alerts to be evicted")
 		}
+	}
+}
+
+func TestStoreAlertCloneHandlesNilPayloadVariants(t *testing.T) {
+	store := NewStore()
+	kinds := []AlertPayloadKind{
+		AlertPayloadNone,
+		AlertPayloadText,
+		AlertPayloadProcess,
+		AlertPayloadConnection,
+		AlertPayloadRule,
+		AlertPayloadFirewall,
+	}
+	for _, kind := range kinds {
+		store.AddAlert(Alert{ID: string(kind), PayloadKind: kind})
+	}
+	alerts := store.Snapshot().Alerts
+	if len(alerts) != len(kinds) {
+		t.Fatalf("expected %d alerts, got %d", len(kinds), len(alerts))
+	}
+	for _, alert := range alerts {
+		if alert.Process != nil || alert.Connection != nil || alert.Rule != nil || alert.FirewallRule != nil {
+			t.Fatalf("unexpected payload synthesized for %#v", alert)
+		}
+	}
+}
+
+func TestStoreAlertDeepCopyIsolation(t *testing.T) {
+	alert := Alert{
+		ID:          "a1",
+		PayloadKind: AlertPayloadProcess,
+		Process: &Process{
+			Args:        []string{"one"},
+			Env:         map[string]string{"TOKEN": "one"},
+			Checksums:   map[string]string{"sha256": "one"},
+			ProcessTree: []ProcessTreeEntry{{Path: "one", PID: 1}},
+		},
+		Rule: &Rule{Operator: RuleOperator{Children: []RuleOperator{{Data: "one"}}}},
+		FirewallRule: &FirewallRule{Expressions: []FirewallExpression{{Statement: &FirewallStatement{
+			Values: []FirewallStatementValue{{Key: "one", Value: "one"}},
+		}}}},
+		Connection: &Connection{
+			ProcessArgs: []string{"one"}, ProcessEnv: map[string]string{"A": "one"},
+			ProcessChecksums: map[string]string{"sha256": "one"},
+			ProcessTree:      []ProcessTreeEntry{{Path: "one", PID: 1}},
+		},
+	}
+	store := NewStore()
+	store.AddAlert(alert)
+
+	alert.Process.Args[0] = "mutated"
+	alert.Process.Env["TOKEN"] = "mutated"
+	alert.Rule.Operator.Children[0].Data = "mutated"
+	alert.FirewallRule.Expressions[0].Statement.Values[0].Value = "mutated"
+	alert.Connection.ProcessEnv["A"] = "mutated"
+
+	first := store.Snapshot().Alerts[0]
+	if first.Process.Args[0] != "one" || first.Process.Env["TOKEN"] != "one" ||
+		first.Rule.Operator.Children[0].Data != "one" ||
+		first.FirewallRule.Expressions[0].Statement.Values[0].Value != "one" ||
+		first.Connection.ProcessEnv["A"] != "one" {
+		t.Fatalf("store retained aliases to input: %#v", first)
+	}
+
+	first.Process.Args[0] = "snapshot"
+	first.Process.Env["TOKEN"] = "snapshot"
+	first.Rule.Operator.Children[0].Data = "snapshot"
+	first.FirewallRule.Expressions[0].Statement.Values[0].Value = "snapshot"
+	first.Connection.ProcessTree[0].Path = "snapshot"
+	second := store.Snapshot().Alerts[0]
+	if second.Process.Args[0] != "one" || second.Process.Env["TOKEN"] != "one" ||
+		second.Rule.Operator.Children[0].Data != "one" ||
+		second.FirewallRule.Expressions[0].Statement.Values[0].Value != "one" ||
+		second.Connection.ProcessTree[0].Path != "one" {
+		t.Fatalf("snapshot retained aliases to store: %#v", second)
 	}
 }
 
