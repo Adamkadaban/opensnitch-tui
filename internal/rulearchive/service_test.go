@@ -14,7 +14,7 @@ import (
 	"github.com/adamkadaban/opensnitch-tui/internal/state"
 )
 
-func TestExportImportRoundTripNestedOperators(t *testing.T) {
+func TestExportImportRoundTripImmediateList(t *testing.T) {
 	service, root := newTestService(t, DefaultLimits())
 	node := state.Node{ID: "tcp://10.0.0.1:50051", Name: "../Office / Node"}
 	created := time.Date(2026, time.July, 31, 12, 34, 56, 123000000, time.FixedZone("test", -7*60*60))
@@ -35,10 +35,7 @@ func TestExportImportRoundTripNestedOperators(t *testing.T) {
 			Children: []state.RuleOperator{{
 				Type: "simple", Operand: "process.path", Data: "/usr/bin/curl", Sensitive: true,
 			}, {
-				Type: "list",
-				Children: []state.RuleOperator{{
-					Type: "simple", Operand: "dest.host", Data: "example.com",
-				}},
+				Type: "simple", Operand: "dest.host", Data: "example.com",
 			}},
 		},
 	}}
@@ -80,6 +77,64 @@ func TestExportImportRoundTripNestedOperators(t *testing.T) {
 	}
 }
 
+func TestExportRejectsNestedListForOpenSnitchV18(t *testing.T) {
+	service, _ := newTestService(t, DefaultLimits())
+	node := state.Node{ID: "node-1", Name: "nested-export"}
+	rule := validRule("nested")
+	rule.Operator = state.RuleOperator{
+		Type: "list",
+		Children: []state.RuleOperator{{
+			Type: "list",
+			Children: []state.RuleOperator{{
+				Type: "simple", Operand: "dest.host", Data: "example.com",
+			}},
+		}},
+	}
+
+	_, err := service.Export(context.Background(), node, []state.Rule{rule})
+	if err == nil ||
+		!strings.Contains(err.Error(), `rule "nested" operator`) ||
+		!strings.Contains(err.Error(), "operator depth 2") ||
+		!strings.Contains(err.Error(), "OpenSnitch v1.8") {
+		t.Fatalf("expected rule, depth, and v1.8 incompatibility error, got %v", err)
+	}
+	if _, statErr := os.Lstat(service.Directory(node)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unsafe export created node archive: %v", statErr)
+	}
+}
+
+func TestImportRejectsUnsafeNestedAllowRule(t *testing.T) {
+	service, _ := newTestService(t, DefaultLimits())
+	node := state.Node{ID: "node-1", Name: "nested-import"}
+	dir := prepareNodeDir(t, service, node)
+	writeArchive(t, filepath.Join(dir, "unsafe.json"), `{
+  "name": "unsafe-allow",
+  "action": "allow",
+  "duration": "always",
+  "operator": {
+    "type": "list",
+    "list": [
+      {"type": "simple", "operand": "process.path", "data": "/usr/bin/curl"},
+      {"type": "list"}
+    ]
+  },
+  "enabled": true,
+  "precedence": false,
+  "nolog": false
+}`)
+
+	rules, _, err := service.Import(context.Background(), node)
+	if err == nil ||
+		!strings.Contains(err.Error(), `rule "unsafe-allow" operator`) ||
+		!strings.Contains(err.Error(), "operator depth 2") ||
+		!strings.Contains(err.Error(), "OpenSnitch v1.8") {
+		t.Fatalf("expected unsafe allow import rejection, got rules=%+v err=%v", rules, err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("unsafe allow rule must not be returned for application: %+v", rules)
+	}
+}
+
 func TestImportAcceptsLegacyUnixTimestamp(t *testing.T) {
 	service, _ := newTestService(t, DefaultLimits())
 	node := state.Node{ID: "node-1", Name: "alpha"}
@@ -108,18 +163,19 @@ func TestImportAcceptsLegacyUnixTimestamp(t *testing.T) {
 	}
 }
 
-func TestExportPermissionsAndAtomicReplacement(t *testing.T) {
+func TestExportPermissionsReplacementAndStaleRemoval(t *testing.T) {
 	service, _ := newTestService(t, DefaultLimits())
 	node := state.Node{ID: "node-1", Name: "alpha"}
 	rule := validRule("one")
-	dir, err := service.Export(context.Background(), node, []state.Rule{rule})
+	dir, err := service.Export(context.Background(), node, []state.Rule{rule, validRule("stale")})
 	if err != nil {
 		t.Fatalf("first Export error: %v", err)
 	}
 	assertMode(t, dir, 0o700)
 	entries, _ := os.ReadDir(dir)
-	path := filepath.Join(dir, entries[0].Name())
-	assertMode(t, path, 0o600)
+	for _, entry := range entries {
+		assertMode(t, filepath.Join(dir, entry.Name()), 0o600)
+	}
 
 	rule.Description = "replacement"
 	if _, err := service.Export(context.Background(), node, []state.Rule{rule}); err != nil {
@@ -127,12 +183,143 @@ func TestExportPermissionsAndAtomicReplacement(t *testing.T) {
 	}
 	entries, _ = os.ReadDir(dir)
 	if len(entries) != 1 || strings.Contains(entries[0].Name(), ".tmp") {
-		t.Fatalf("expected atomic replacement without temporary files, got %+v", entries)
+		t.Fatalf("expected replacement to remove stale files, got %+v", entries)
 	}
+	path := filepath.Join(dir, entries[0].Name())
+	assertMode(t, dir, 0o700)
+	assertMode(t, path, 0o600)
 	data, _ := os.ReadFile(path)
 	var decoded map[string]any
 	if err := json.Unmarshal(data, &decoded); err != nil || decoded["description"] != "replacement" {
 		t.Fatalf("expected complete replacement JSON, got %s (err=%v)", data, err)
+	}
+	assertNoGenerationResidue(t, service.root)
+}
+
+func TestExportStageFailureLeavesExistingGenerationUnchanged(t *testing.T) {
+	service, _ := newTestService(t, DefaultLimits())
+	node := state.Node{ID: "node-1", Name: "stage-failure"}
+	dir, err := service.Export(context.Background(), node, []state.Rule{validRule("old")})
+	if err != nil {
+		t.Fatalf("initial Export error: %v", err)
+	}
+	before := snapshotArchive(t, dir)
+	service.exportHook = func(step exportStep) error {
+		if step.phase == exportStepFileStaged && step.index == 0 {
+			return errors.New("injected staged write failure")
+		}
+		return nil
+	}
+
+	_, err = service.Export(context.Background(), node, []state.Rule{validRule("new"), validRule("later")})
+	if err == nil || !strings.Contains(err.Error(), "injected staged write failure") {
+		t.Fatalf("expected injected staging failure, got %v", err)
+	}
+	assertArchiveSnapshot(t, dir, before)
+	assertNoGenerationResidue(t, service.root)
+}
+
+func TestExportCancellationAfterStagedFileLeavesExistingGenerationUnchanged(t *testing.T) {
+	service, _ := newTestService(t, DefaultLimits())
+	node := state.Node{ID: "node-1", Name: "cancel-stage"}
+	dir, err := service.Export(context.Background(), node, []state.Rule{validRule("old")})
+	if err != nil {
+		t.Fatalf("initial Export error: %v", err)
+	}
+	before := snapshotArchive(t, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	service.exportHook = func(step exportStep) error {
+		if step.phase == exportStepFileStaged && step.index == 0 {
+			cancel()
+		}
+		return nil
+	}
+
+	_, err = service.Export(ctx, node, []state.Rule{validRule("new"), validRule("later")})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	assertArchiveSnapshot(t, dir, before)
+	assertNoGenerationResidue(t, service.root)
+}
+
+func TestExportPublishFailuresRollBackExistingGeneration(t *testing.T) {
+	for _, phase := range []string{exportStepBackupCreated, exportStepPublished} {
+		t.Run(phase, func(t *testing.T) {
+			service, _ := newTestService(t, DefaultLimits())
+			node := state.Node{ID: "node-1", Name: "publish-failure"}
+			dir, err := service.Export(context.Background(), node, []state.Rule{validRule("old")})
+			if err != nil {
+				t.Fatalf("initial Export error: %v", err)
+			}
+			before := snapshotArchive(t, dir)
+			service.exportHook = func(step exportStep) error {
+				if step.phase == phase {
+					return errors.New("injected publish failure")
+				}
+				return nil
+			}
+
+			_, err = service.Export(context.Background(), node, []state.Rule{validRule("new")})
+			if err == nil || !strings.Contains(err.Error(), "injected publish failure") {
+				t.Fatalf("expected injected publish failure, got %v", err)
+			}
+			assertArchiveSnapshot(t, dir, before)
+			assertNoGenerationResidue(t, service.root)
+		})
+	}
+}
+
+func TestExportRejectsUnsafeExistingTargets(t *testing.T) {
+	tests := []struct {
+		name string
+		make func(*testing.T, *Service, state.Node)
+		want string
+	}{
+		{
+			name: "target symlink",
+			make: func(t *testing.T, service *Service, node state.Node) {
+				target := filepath.Join(service.root, "other")
+				if err := os.Mkdir(target, 0o700); err != nil {
+					t.Fatalf("Mkdir target: %v", err)
+				}
+				if err := os.Symlink(target, service.Directory(node)); err != nil {
+					t.Fatalf("Symlink target: %v", err)
+				}
+			},
+			want: "not a regular directory",
+		},
+		{
+			name: "target file",
+			make: func(t *testing.T, service *Service, node state.Node) {
+				writeArchive(t, service.Directory(node), "not a directory")
+			},
+			want: "not a regular directory",
+		},
+		{
+			name: "symlink file",
+			make: func(t *testing.T, service *Service, node state.Node) {
+				dir := prepareNodeDir(t, service, node)
+				target := filepath.Join(service.root, "outside.json")
+				writeArchive(t, target, validArchiveJSON("outside"))
+				if err := os.Symlink(target, filepath.Join(dir, "linked.json")); err != nil {
+					t.Fatalf("Symlink file: %v", err)
+				}
+			},
+			want: "symlink archive file",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, _ := newTestService(t, DefaultLimits())
+			node := state.Node{ID: "node-1", Name: test.name}
+			test.make(t, service, node)
+			_, err := service.Export(context.Background(), node, []state.Rule{validRule("new")})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q error, got %v", test.want, err)
+			}
+			assertNoGenerationResidue(t, service.root)
+		})
 	}
 }
 
@@ -322,6 +509,43 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %o, want %o", path, got, want)
+	}
+}
+
+func snapshotArchive(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir %s: %v", dir, err)
+	}
+	snapshot := make(map[string][]byte, len(entries))
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", entry.Name(), err)
+		}
+		snapshot[entry.Name()] = data
+	}
+	return snapshot
+}
+
+func assertArchiveSnapshot(t *testing.T, dir string, want map[string][]byte) {
+	t.Helper()
+	if got := snapshotArchive(t, dir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("archive changed\nwant: %#v\ngot:  %#v", want, got)
+	}
+}
+
+func assertNoGenerationResidue(t *testing.T, root string) {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir root: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".stage-") || strings.Contains(entry.Name(), ".backup-") {
+			t.Fatalf("unexpected rule archive generation residue: %s", entry.Name())
+		}
 	}
 }
 

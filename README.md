@@ -73,7 +73,7 @@ The Rules view imports and exports only the currently selected, connected node. 
 ${XDG_DATA_HOME:-~/.local/share}/opensnitch-tui/rules/<sanitized-node>/
 ```
 
-Directories are `0700`, files are `0600`, and exports use atomic replacement. Filenames are sanitized, while rule names inside JSON remain unchanged. Import reads only regular `.json` files from that fixed node directory and rejects links, malformed or duplicate rules, unsafe operator trees, and oversized batches. Same-name rules replace existing rules only after the daemon acknowledges the `CHANGE_RULE` batch; daemon errors leave the in-memory rule state unchanged.
+Directories are `0700`, files are `0600`, and exports stage and fsync a complete node generation before replacing the prior archive with rollback protection. Filenames are sanitized, while rule names inside JSON remain unchanged. Import reads only regular `.json` files from that fixed node directory and rejects links, malformed or duplicate rules, unsafe operator trees, and oversized batches. Nested `LIST` operators are rejected because OpenSnitch v1.8 only preserves immediate list children. Same-name rules replace existing rules only after the daemon acknowledges the `CHANGE_RULE` batch; daemon errors leave the in-memory rule state unchanged.
 
 ## 🚨 Alert archives
 

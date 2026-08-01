@@ -53,9 +53,22 @@ func DefaultLimits() Limits {
 }
 
 type Service struct {
-	root   string
-	limits Limits
+	root       string
+	limits     Limits
+	exportHook func(exportStep) error
 }
+
+type exportStep struct {
+	phase string
+	index int
+}
+
+const (
+	exportStepFileStaged    = "file-staged"
+	exportStepBeforePublish = "before-publish"
+	exportStepBackupCreated = "backup-created"
+	exportStepPublished     = "published"
+)
 
 func New(root string, limits Limits) (*Service, error) {
 	if strings.TrimSpace(root) == "" {
@@ -124,18 +137,28 @@ func (s *Service) Export(ctx context.Context, node state.Node, rules []state.Rul
 	if err := ensurePrivateDir(s.root); err != nil {
 		return dir, err
 	}
-	if err := ensurePrivateDir(dir); err != nil {
+	if _, err := inspectExistingArchive(dir); err != nil {
 		return dir, err
 	}
 
-	expected := make(map[string]struct{}, len(rules))
+	stage, err := os.MkdirTemp(s.root, "."+filepath.Base(dir)+".stage-")
+	if err != nil {
+		return dir, fmt.Errorf("create rule archive staging directory: %w", err)
+	}
+	if err := os.Chmod(stage, dirMode); err != nil {
+		_ = removeGenerationPath(s.root, dir, stage)
+		return dir, fmt.Errorf("secure rule archive staging directory: %w", err)
+	}
+	defer func() {
+		_ = removeGenerationPath(s.root, dir, stage)
+	}()
+
 	var total int64
-	for _, rule := range rules {
+	for i, rule := range rules {
 		if err := ctx.Err(); err != nil {
 			return dir, err
 		}
 		name := archiveFilename(rule.Name)
-		expected[name] = struct{}{}
 		data, err := marshalRule(rule)
 		if err != nil {
 			return dir, fmt.Errorf("encode rule %q: %w", rule.Name, err)
@@ -147,13 +170,33 @@ func (s *Service) Export(ctx context.Context, node state.Node, rules []state.Rul
 		if total > s.limits.MaxTotalBytes {
 			return dir, fmt.Errorf("rule archives exceed total size limit of %d bytes", s.limits.MaxTotalBytes)
 		}
-		if err := atomicWrite(filepath.Join(dir, name), data); err != nil {
-			return dir, fmt.Errorf("write rule %q: %w", rule.Name, err)
+		if err := writeStagedFile(filepath.Join(stage, name), data); err != nil {
+			return dir, fmt.Errorf("stage rule %q: %w", rule.Name, err)
+		}
+		if err := s.runExportHook(exportStep{phase: exportStepFileStaged, index: i}); err != nil {
+			return dir, fmt.Errorf("stage rule %q: %w", rule.Name, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return dir, err
 		}
 	}
-	if err := removeStaleArchives(dir, expected); err != nil {
+	if err := syncDirectory(stage); err != nil {
+		return dir, fmt.Errorf("sync rule archive staging directory: %w", err)
+	}
+	if err := s.runExportHook(exportStep{phase: exportStepBeforePublish}); err != nil {
+		return dir, fmt.Errorf("publish rule archive: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
 		return dir, err
 	}
+	exists, err := inspectExistingArchive(dir)
+	if err != nil {
+		return dir, err
+	}
+	if err := s.publishGeneration(stage, dir, exists); err != nil {
+		return dir, err
+	}
+	stage = ""
 	return dir, nil
 }
 
@@ -438,8 +481,16 @@ func validateRule(rule state.Rule, limits Limits) error {
 }
 
 func validateOperator(op state.RuleOperator, limits Limits, depth int, count *int) error {
+	return validateOperatorTree(op, limits, depth, 0, count)
+}
+
+func validateOperatorTree(op state.RuleOperator, limits Limits, depth, listDepth int, count *int) error {
 	if depth > limits.MaxOperatorDepth {
 		return fmt.Errorf("tree depth exceeds limit of %d", limits.MaxOperatorDepth)
+	}
+	isList := strings.EqualFold(strings.TrimSpace(op.Type), "list") || len(op.Children) > 0
+	if isList && listDepth > 0 {
+		return fmt.Errorf("operator depth %d contains a nested LIST; OpenSnitch v1.8 only preserves immediate LIST children, so this rule is incompatible and unsafe to archive", depth)
 	}
 	*count++
 	if *count > limits.MaxOperators {
@@ -460,8 +511,12 @@ func validateOperator(op state.RuleOperator, limits Limits, depth int, count *in
 	if len(op.Children) > limits.MaxChildren {
 		return fmt.Errorf("list contains %d children: limit is %d", len(op.Children), limits.MaxChildren)
 	}
+	nextListDepth := listDepth
+	if isList {
+		nextListDepth++
+	}
 	for i, child := range op.Children {
-		if err := validateOperator(child, limits, depth+1, count); err != nil {
+		if err := validateOperatorTree(child, limits, depth+1, nextListDepth, count); err != nil {
 			return fmt.Errorf("list item %d: %w", i+1, err)
 		}
 	}
@@ -500,72 +555,182 @@ func ensurePrivateDir(path string) error {
 	return nil
 }
 
-func atomicWrite(path string, data []byte) (err error) {
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".rule-*.tmp")
+func writeStagedFile(path string, data []byte) (err error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
 	if err != nil {
 		return err
 	}
-	tempName := temp.Name()
 	defer func() {
 		if err != nil {
-			_ = temp.Close()
-			_ = os.Remove(tempName)
+			_ = file.Close()
+			_ = os.Remove(path)
 		}
 	}()
-	if err = temp.Chmod(fileMode); err != nil {
+	if err = file.Chmod(fileMode); err != nil {
 		return err
 	}
-	if _, err = temp.Write(data); err != nil {
+	if _, err = file.Write(data); err != nil {
 		return err
 	}
-	if err = temp.Sync(); err != nil {
+	if err = file.Sync(); err != nil {
 		return err
 	}
-	if err = temp.Close(); err != nil {
+	if err = file.Close(); err != nil {
 		return err
 	}
-	if err = os.Rename(tempName, path); err != nil {
-		return err
-	}
-	if err = os.Chmod(path, fileMode); err != nil {
-		return err
-	}
-	dirHandle, openErr := os.Open(dir)
-	if openErr != nil {
-		return openErr
-	}
-	defer dirHandle.Close()
-	return dirHandle.Sync()
+	return nil
 }
 
-func removeStaleArchives(dir string, expected map[string]struct{}) error {
-	entries, err := os.ReadDir(dir)
+func inspectExistingArchive(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
-		return fmt.Errorf("read archive directory %s: %w", dir, err)
+		return false, fmt.Errorf("inspect archive directory %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, fmt.Errorf("archive path is not a regular directory: %s", path)
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, fmt.Errorf("read archive directory %s: %w", path, err)
 	}
 	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return false, fmt.Errorf("refusing symlink archive file %s", entry.Name())
+		}
 		if filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing symlink archive file %s", entry.Name())
-		}
 		info, err := entry.Info()
 		if err != nil {
-			return fmt.Errorf("inspect archive file %s: %w", entry.Name(), err)
+			return false, fmt.Errorf("inspect archive file %s: %w", entry.Name(), err)
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("refusing non-regular archive file %s", entry.Name())
-		}
-		if _, ok := expected[entry.Name()]; ok {
-			continue
-		}
-		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
-			return fmt.Errorf("remove stale archive file %s: %w", entry.Name(), err)
+			return false, fmt.Errorf("refusing non-regular archive file %s", entry.Name())
 		}
 	}
+	return true, nil
+}
+
+func (s *Service) runExportHook(step exportStep) error {
+	if s.exportHook == nil {
+		return nil
+	}
+	return s.exportHook(step)
+}
+
+func (s *Service) publishGeneration(stage, target string, exists bool) error {
+	if !exists {
+		if err := os.Rename(stage, target); err != nil {
+			return fmt.Errorf("publish rule archive generation: %w", err)
+		}
+		if err := s.runExportHook(exportStep{phase: exportStepPublished}); err != nil {
+			return rollbackPublishError(s.root, stage, target, "", err)
+		}
+		if err := syncDirectory(s.root); err != nil {
+			return rollbackPublishError(s.root, stage, target, "", err)
+		}
+		return nil
+	}
+
+	backup, err := reserveBackupPath(s.root, target)
+	if err != nil {
+		return fmt.Errorf("prepare rule archive backup: %w", err)
+	}
+	if err := os.Rename(target, backup); err != nil {
+		return fmt.Errorf("back up existing rule archive: %w", err)
+	}
+	if err := s.runExportHook(exportStep{phase: exportStepBackupCreated}); err != nil {
+		return rollbackBackupError(s.root, backup, target, err)
+	}
+	if err := os.Rename(stage, target); err != nil {
+		return rollbackBackupError(s.root, backup, target, fmt.Errorf("publish rule archive generation: %w", err))
+	}
+	if err := s.runExportHook(exportStep{phase: exportStepPublished}); err != nil {
+		return rollbackPublishError(s.root, stage, target, backup, err)
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return rollbackPublishError(s.root, stage, target, backup, err)
+	}
+	if err := removeGenerationPath(s.root, target, backup); err != nil {
+		return fmt.Errorf("remove rule archive backup: %w", err)
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return fmt.Errorf("sync rule archive parent after backup removal: %w", err)
+	}
 	return nil
+}
+
+func reserveBackupPath(root, target string) (string, error) {
+	path, err := os.MkdirTemp(root, "."+filepath.Base(target)+".backup-")
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func rollbackBackupError(root, backup, target string, cause error) error {
+	if err := os.Rename(backup, target); err != nil {
+		return errors.Join(cause, fmt.Errorf("restore previous rule archive: %w", err))
+	}
+	if err := syncDirectory(root); err != nil {
+		return errors.Join(cause, fmt.Errorf("sync restored rule archive: %w", err))
+	}
+	return cause
+}
+
+func rollbackPublishError(root, stage, target, backup string, cause error) error {
+	if err := os.Rename(target, stage); err != nil {
+		return errors.Join(cause, fmt.Errorf("remove failed rule archive generation: %w", err))
+	}
+	if backup != "" {
+		if err := os.Rename(backup, target); err != nil {
+			return errors.Join(cause, fmt.Errorf("restore previous rule archive: %w", err))
+		}
+	}
+	if err := syncDirectory(root); err != nil {
+		return errors.Join(cause, fmt.Errorf("sync rolled back rule archive: %w", err))
+	}
+	return cause
+}
+
+func syncDirectory(path string) error {
+	handle, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	return handle.Sync()
+}
+
+func removeGenerationPath(root, target, path string) error {
+	if path == "" {
+		return nil
+	}
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	base := filepath.Base(target)
+	name := filepath.Base(path)
+	if filepath.Dir(path) != root ||
+		(!strings.HasPrefix(name, "."+base+".stage-") && !strings.HasPrefix(name, "."+base+".backup-")) {
+		return fmt.Errorf("refusing to remove path outside rule archive generations: %s", path)
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return os.Remove(path)
+	}
+	return os.RemoveAll(path)
 }
 
 func readBoundedRegular(path string, maxBytes int64) ([]byte, error) {
