@@ -365,10 +365,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 				// let global tab navigation (view switching) work while inspecting
 				return nil, false
 			case "up", "pgup":
-				m.inspectVP.LineUp(1)
+				m.inspectVP.ScrollUp(1)
 				return nil, true
 			case "down", "pgdown":
-				m.inspectVP.LineDown(1)
+				m.inspectVP.ScrollDown(1)
 				return nil, true
 			case "left":
 				m.adjustInspectX(-4)
