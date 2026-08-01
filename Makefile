@@ -18,6 +18,10 @@ build-all:
 test:
 	$(GO) test ./...
 
+.PHONY: test-opensnitch-integration
+test-opensnitch-integration:
+	./scripts/test-opensnitch-integration.sh
+
 .PHONY: lint
 lint:
 	golangci-lint run

@@ -85,3 +85,16 @@ nodes: []
 - Use `make capture-ui` to record deterministic screenshots before and after navigation inputs
 - Visual captures require [`tmux`](https://github.com/tmux/tmux) and [`freeze`](https://github.com/charmbracelet/freeze)
 - Captures are written under ignored `artifacts/tui-captures/`; never commit captures from a real daemon or production environment
+
+### Real OpenSnitch v1.8 integration
+
+> [!CAUTION]
+> Run this only on a disposable Linux VM. It temporarily stops and starts the OpenSnitch systemd service, owns `/tmp/osui.sock` during the test, reloads the firewall's currently reported rules, and allows one `curl` request to `https://example.com`. It does not disable the firewall or create a persistent allow rule.
+
+With OpenSnitch v1.8.0 installed and configured for its default `unix:///tmp/osui.sock` UI address:
+
+```bash
+sudo make test-opensnitch-integration
+```
+
+The harness detects `opensnitch.service` or `opensnitchd.service`; set `OPENSNITCH_SERVICE` only when the packaged unit uses another name. Normal `go test ./...` runs skip the real-service test without requiring root, systemd, or `curl`.

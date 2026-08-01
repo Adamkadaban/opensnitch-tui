@@ -28,6 +28,7 @@ func TestSendNotificationReturnsMatchingReply(t *testing.T) {
 	if sent.GetId() == 0 || sent.GetId() == original.GetId() {
 		t.Fatalf("expected a newly assigned notification id, got %d", sent.GetId())
 	}
+
 	if sent.GetClientName() != stream.nodeID {
 		t.Fatalf("expected client name %q, got %q", stream.nodeID, sent.GetClientName())
 	}
@@ -54,6 +55,16 @@ func TestSendNotificationReturnsMatchingReply(t *testing.T) {
 	}
 	if got.reply.GetData() != "applied" {
 		t.Fatalf("expected matching reply, got %+v", got.reply)
+	}
+}
+
+func TestNotificationIDsExceedTaskStreamingFloor(t *testing.T) {
+	srv := New(state.NewStore(), Options{})
+	if id := srv.nextNotificationID(); id <= notificationIDFloor {
+		t.Fatalf("notification id %d must exceed streaming floor %d", id, notificationIDFloor)
+	}
+	if srv.opts.ListenAddr != "unix:///tmp/osui.sock" {
+		t.Fatalf("unexpected default listen address %q", srv.opts.ListenAddr)
 	}
 }
 

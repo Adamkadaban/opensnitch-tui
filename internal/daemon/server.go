@@ -113,7 +113,7 @@ const (
 // New creates a new daemon RPC server.
 func New(store *state.Store, opts Options) *Server {
 	if opts.ListenAddr == "" {
-		opts.ListenAddr = "127.0.0.1:50051"
+		opts.ListenAddr = "unix:///tmp/osui.sock"
 	}
 	if opts.MaxMsgBytes == 0 {
 		opts.MaxMsgBytes = 32 << 20
@@ -124,7 +124,13 @@ func New(store *state.Store, opts Options) *Server {
 	if opts.ServerVersion == "" {
 		opts.ServerVersion = "dev"
 	}
-	return &Server{store: store, opts: opts, sessions: make(map[string]*session), prompts: make(map[string]*promptRequest)}
+	return &Server{
+		store:       store,
+		opts:        opts,
+		sessions:    make(map[string]*session),
+		notifySeqID: notificationIDFloor,
+		prompts:     make(map[string]*promptRequest),
+	}
 }
 
 // Start begins listening for daemon connections until the context is cancelled.

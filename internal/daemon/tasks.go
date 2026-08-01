@@ -111,12 +111,15 @@ func (s *Server) StopTask(ctx context.Context, stream controller.TaskStream) err
 	if !ok || task == nil || task.server != s {
 		return ErrInvalidTaskStream
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	task.unregister()
-	_, err := s.SendNotification(ctx, task.nodeID, &pb.Notification{
-		Type: pb.Action_TASK_STOP,
-		Data: task.payload,
-	})
+	notification := s.newNotification(pb.Action_TASK_STOP, task.nodeID)
+	notification.Data = task.payload
+	// OpenSnitch v1.8 does not send a reply for TASK_STOP.
+	err := s.sendNotification(task.nodeID, notification)
 	task.finish(err)
 	return err
 }
