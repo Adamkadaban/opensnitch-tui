@@ -384,10 +384,15 @@ func runCurlPromptFlow(
 	if err := server.ResolvePrompt(controller.PromptDecision{
 		PromptID: prompt.ID,
 		Action:   controller.PromptActionAllow,
-		Duration: controller.PromptDurationOnce,
+		Duration: controller.PromptDuration30Seconds,
 		Target:   controller.PromptTargetProcessPath,
+		Conditions: []controller.PromptCondition{
+			{Target: controller.PromptTargetDestinationIP},
+			{Target: controller.PromptTargetDestinationPort},
+			{Target: controller.PromptTargetUserID},
+		},
 	}); err != nil {
-		t.Fatalf("resolve curl prompt with allow-once: %v", err)
+		t.Fatalf("resolve curl prompt with composite timed rule: %v", err)
 	}
 	select {
 	case err := <-curlDone:
@@ -395,8 +400,34 @@ func runCurlPromptFlow(
 			t.Fatalf("curl failed after allow-once decision (stderr=%q): %v", stderr.String(), err)
 		}
 	case <-curlCtx.Done():
-		t.Fatalf("curl did not finish after allow-once decision (stderr=%q): %v", stderr.String(), curlCtx.Err())
+		t.Fatalf("curl did not finish after composite decision (stderr=%q): %v", stderr.String(), curlCtx.Err())
 	}
+	assertCompositePromptRule(t, store.Snapshot().Rules[prompt.NodeID])
+}
+
+func assertCompositePromptRule(t *testing.T, rules []state.Rule) {
+	t.Helper()
+	for _, rule := range rules {
+		if rule.Duration != string(controller.PromptDuration30Seconds) || rule.Operator.Type != ruleTypeList {
+			continue
+		}
+		operands := make(map[string]bool, len(rule.Operator.Children))
+		for _, child := range rule.Operator.Children {
+			operands[child.Operand] = true
+		}
+		for _, operand := range []string{
+			operandProcessPath,
+			operandDestIP,
+			operandDestPort,
+			operandUserID,
+		} {
+			if !operands[operand] {
+				t.Fatalf("composite prompt rule missing operand %s: %+v", operand, rule)
+			}
+		}
+		return
+	}
+	t.Fatalf("composite 30-second prompt rule not found: %+v", rules)
 }
 
 func assertTaskStreamClean(t *testing.T, stream controller.TaskStream) {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -98,6 +100,9 @@ type promptResponse struct {
 const (
 	defaultPromptTimeout = 30 * time.Second
 	ruleTypeSimple       = "simple"
+	ruleTypeList         = "list"
+	maxRuleNameLength    = 128
+	maxRuleDescription   = 240
 )
 
 const (
@@ -108,6 +113,7 @@ const (
 	operandDestIP      = "dest.ip"
 	operandDestHost    = "dest.host"
 	operandDestPort    = "dest.port"
+	operandChecksumMD5 = "process.hash.md5"
 )
 
 // New creates a new daemon RPC server.
@@ -683,18 +689,19 @@ func (s *Server) buildRuleFromDecision(prompt state.Prompt, decision controller.
 	if decision.Target == "" {
 		decision.Target = bestAvailableTarget(prompt.Connection)
 	}
-	operator, err := operatorForTarget(prompt.Connection, decision.Target)
+	operator, err := operatorForDecision(prompt.Connection, decision)
 	if err != nil {
 		return nil, err
 	}
 	name := generateRuleName(prompt, operator, decision.Action, decision.Duration, decision.Target, s.store)
 	return &pb.Rule{
-		Created:  time.Now().Unix(),
-		Name:     name,
-		Enabled:  true,
-		Action:   string(decision.Action),
-		Duration: string(decision.Duration),
-		Operator: operator,
+		Created:     time.Now().Unix(),
+		Name:        name,
+		Description: ruleDescription(operator, decision.Action, decision.Duration),
+		Enabled:     true,
+		Action:      string(decision.Action),
+		Duration:    string(decision.Duration),
+		Operator:    operator,
 	}, nil
 }
 
@@ -723,17 +730,26 @@ func generateRuleName(prompt state.Prompt, op *pb.Operator, action controller.Pr
 	if len(parts) == 0 {
 		parts = append(parts, "rule")
 	}
-	base := strings.Join(parts, "-")
+	base := truncateSlug(strings.Join(parts, "-"), maxRuleNameLength)
 	return ensureUniqueRuleName(base, prompt.NodeID, store)
 }
 
 func operandSlug(op *pb.Operator, conn state.Connection, target controller.PromptTarget) string {
 	if op != nil {
+		if len(op.List) > 0 {
+			operands := make([]string, 0, len(op.List))
+			for _, child := range op.List {
+				if child == nil {
+					continue
+				}
+				if operand := slugify(child.GetOperand()); operand != "" {
+					operands = append(operands, operand)
+				}
+			}
+			return strings.Join(operands, "-")
+		}
 		if op.Data != "" {
 			return slugify(op.Data)
-		}
-		if len(op.List) > 0 {
-			return "list"
 		}
 		switch op.Operand {
 		case operandProcessPath:
@@ -796,13 +812,13 @@ func operandSlug(op *pb.Operator, conn state.Connection, target controller.Promp
 			return slugify(fmt.Sprintf("%d", conn.DstPort))
 		}
 	case controller.PromptTargetUserID:
-		if conn.UserID != 0 {
-			return slugify(fmt.Sprintf("uid-%d", conn.UserID))
-		}
+		return slugify(fmt.Sprintf("uid-%d", conn.UserID))
 	case controller.PromptTargetProcessID:
 		if conn.ProcessID != 0 {
 			return slugify(fmt.Sprintf("pid-%d", conn.ProcessID))
 		}
+	case controller.PromptTargetChecksumMD5:
+		return slugify(operandChecksumMD5)
 	}
 	return ""
 }
@@ -814,7 +830,19 @@ func slugify(s string) string {
 	return s
 }
 
+func truncateSlug(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	value = strings.Trim(value[:limit], "-._")
+	if value == "" {
+		return "rule"
+	}
+	return value
+}
+
 func ensureUniqueRuleName(base string, nodeID string, store *state.Store) string {
+	base = truncateSlug(base, maxRuleNameLength)
 	if store == nil {
 		return base
 	}
@@ -825,50 +853,146 @@ func ensureUniqueRuleName(base string, nodeID string, store *state.Store) string
 	if _, ok := existing[base]; !ok {
 		return base
 	}
-	for i := 1; i < 1000; i++ {
-		candidate := fmt.Sprintf("%s-%d", base, i)
+	for i := 1; ; i++ {
+		suffix := fmt.Sprintf("-%d", i)
+		candidate := truncateSlug(base, maxRuleNameLength-len(suffix)) + suffix
 		if _, ok := existing[candidate]; !ok {
 			return candidate
 		}
 	}
-	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
+}
+
+type operatorData struct {
+	Type    string `json:"type"`
+	Operand string `json:"operand"`
+	Data    string `json:"data"`
+}
+
+var conditionTargetOrder = []controller.PromptTarget{
+	controller.PromptTargetDestinationIP,
+	controller.PromptTargetDestinationPort,
+	controller.PromptTargetUserID,
+	controller.PromptTargetChecksumMD5,
+	controller.PromptTargetProcessPath,
+	controller.PromptTargetProcessCmd,
+	controller.PromptTargetProcessID,
+	controller.PromptTargetDestinationHost,
+}
+
+func operatorForDecision(conn state.Connection, decision controller.PromptDecision) (*pb.Operator, error) {
+	requested := make(map[controller.PromptTarget]bool, len(decision.Conditions))
+	for _, condition := range decision.Conditions {
+		if condition.Target == "" {
+			return nil, fmt.Errorf("condition target required")
+		}
+		if condition.Target == decision.Target {
+			continue
+		}
+		requested[condition.Target] = true
+	}
+	if decision.Target == controller.PromptTargetProcessCmd && commandNeedsProcessPath(conn) {
+		requested[controller.PromptTargetProcessPath] = true
+	}
+
+	operators := make([]*pb.Operator, 0, len(requested)+1)
+	for _, target := range conditionTargetOrder {
+		if !requested[target] {
+			continue
+		}
+		operator, err := operatorForTarget(conn, target)
+		if err != nil {
+			return nil, fmt.Errorf("%s condition: %w", target, err)
+		}
+		operators = append(operators, operator)
+		delete(requested, target)
+	}
+	if len(requested) > 0 {
+		for target := range requested {
+			return nil, fmt.Errorf("unsupported target %s", target)
+		}
+	}
+
+	base, err := operatorForTarget(conn, decision.Target)
+	if err != nil {
+		return nil, fmt.Errorf("%s condition: %w", decision.Target, err)
+	}
+	operators = append(operators, base)
+	if len(operators) == 1 {
+		return operators[0], nil
+	}
+
+	data := make([]operatorData, len(operators))
+	for i, operator := range operators {
+		data[i] = operatorData{
+			Type:    operator.GetType(),
+			Operand: operator.GetOperand(),
+			Data:    operator.GetData(),
+		}
+	}
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("encode composite operator: %w", err)
+	}
+	return &pb.Operator{
+		Type:    ruleTypeList,
+		Operand: ruleTypeList,
+		Data:    string(encoded),
+		List:    operators,
+	}, nil
+}
+
+func commandNeedsProcessPath(conn state.Connection) bool {
+	if len(conn.ProcessArgs) == 0 {
+		return false
+	}
+	command := strings.TrimSpace(conn.ProcessArgs[0])
+	return !filepath.IsAbs(command) || strings.HasPrefix(filepath.Clean(command), "/proc/")
 }
 
 func operatorForTarget(conn state.Connection, target controller.PromptTarget) (*pb.Operator, error) {
 	switch target {
 	case controller.PromptTargetProcessPath:
-		if conn.ProcessPath == "" {
+		path := strings.TrimSpace(conn.ProcessPath)
+		if path == "" {
 			return nil, fmt.Errorf("process path unavailable")
 		}
-		return simpleOperator(operandProcessPath, conn.ProcessPath), nil
+		return simpleOperator(operandProcessPath, path), nil
 	case controller.PromptTargetProcessCmd:
 		cmdLine := strings.TrimSpace(strings.Join(conn.ProcessArgs, " "))
 		if cmdLine == "" {
-			if conn.ProcessPath == "" {
-				return nil, fmt.Errorf("command line unavailable")
-			}
-			return simpleOperator(operandProcessPath, conn.ProcessPath), nil
+			return nil, fmt.Errorf("command line unavailable")
 		}
 		return simpleOperator(operandProcessCmd, cmdLine), nil
 	case controller.PromptTargetProcessID:
+		if conn.ProcessID == 0 {
+			return nil, fmt.Errorf("process id unavailable")
+		}
 		return simpleOperator(operandProcessID, fmt.Sprintf("%d", conn.ProcessID)), nil
 	case controller.PromptTargetUserID:
 		return simpleOperator(operandUserID, fmt.Sprintf("%d", conn.UserID)), nil
 	case controller.PromptTargetDestinationIP:
-		if conn.DstIP == "" {
+		ip := strings.TrimSpace(conn.DstIP)
+		if ip == "" {
 			return nil, fmt.Errorf("destination ip unavailable")
 		}
-		return simpleOperator(operandDestIP, conn.DstIP), nil
+		return simpleOperator(operandDestIP, ip), nil
 	case controller.PromptTargetDestinationHost:
-		if conn.DstHost == "" {
+		host := strings.TrimSpace(conn.DstHost)
+		if host == "" {
 			return nil, fmt.Errorf("destination host unavailable")
 		}
-		return simpleOperator(operandDestHost, conn.DstHost), nil
+		return simpleOperator(operandDestHost, host), nil
 	case controller.PromptTargetDestinationPort:
 		if conn.DstPort == 0 {
 			return nil, fmt.Errorf("destination port unavailable")
 		}
 		return simpleOperator(operandDestPort, fmt.Sprintf("%d", conn.DstPort)), nil
+	case controller.PromptTargetChecksumMD5:
+		checksum := strings.TrimSpace(conn.ProcessChecksums[operandChecksumMD5])
+		if checksum == "" {
+			return nil, fmt.Errorf("md5 checksum unavailable")
+		}
+		return simpleOperator(operandChecksumMD5, checksum), nil
 	default:
 		return nil, fmt.Errorf("unsupported target %s", target)
 	}
@@ -880,6 +1004,27 @@ func simpleOperator(operand, data string) *pb.Operator {
 		Operand: operand,
 		Data:    data,
 	}
+}
+
+func ruleDescription(operator *pb.Operator, action controller.PromptAction, duration controller.PromptDuration) string {
+	operands := []string{}
+	if operator != nil {
+		if len(operator.GetList()) > 0 {
+			for _, child := range operator.GetList() {
+				if child != nil && child.GetOperand() != "" {
+					operands = append(operands, child.GetOperand())
+				}
+			}
+		} else if operator.GetOperand() != "" {
+			operands = append(operands, operator.GetOperand())
+		}
+	}
+	description := fmt.Sprintf("%s connection for %s matching %s.",
+		strings.ToUpper(string(action[:1]))+string(action[1:]),
+		duration,
+		strings.Join(operands, " + "),
+	)
+	return util.TruncateString(description, maxRuleDescription)
 }
 
 func displayConnectionLabel(conn state.Connection) string {
@@ -901,7 +1046,15 @@ func normalizePromptAction(action controller.PromptAction) controller.PromptActi
 
 func normalizePromptDuration(duration controller.PromptDuration) controller.PromptDuration {
 	switch duration {
-	case controller.PromptDurationOnce, controller.PromptDurationUntilRestart, controller.PromptDurationAlways:
+	case controller.PromptDurationOnce,
+		controller.PromptDuration30Seconds,
+		controller.PromptDuration5Minutes,
+		controller.PromptDuration15Minutes,
+		controller.PromptDuration30Minutes,
+		controller.PromptDuration1Hour,
+		controller.PromptDuration12Hours,
+		controller.PromptDurationUntilRestart,
+		controller.PromptDurationAlways:
 		return duration
 	default:
 		return controller.PromptDurationOnce
@@ -911,17 +1064,21 @@ func normalizePromptDuration(duration controller.PromptDuration) controller.Prom
 func targetAvailable(conn state.Connection, target controller.PromptTarget) bool {
 	switch target {
 	case controller.PromptTargetProcessPath:
-		return conn.ProcessPath != ""
+		return strings.TrimSpace(conn.ProcessPath) != ""
 	case controller.PromptTargetProcessCmd:
-		return len(conn.ProcessArgs) > 0 || conn.ProcessPath != ""
+		return strings.TrimSpace(strings.Join(conn.ProcessArgs, " ")) != ""
 	case controller.PromptTargetDestinationHost:
-		return conn.DstHost != ""
+		return strings.TrimSpace(conn.DstHost) != ""
 	case controller.PromptTargetDestinationIP:
-		return conn.DstIP != ""
+		return strings.TrimSpace(conn.DstIP) != ""
 	case controller.PromptTargetDestinationPort:
 		return conn.DstPort != 0
-	case controller.PromptTargetProcessID, controller.PromptTargetUserID:
+	case controller.PromptTargetProcessID:
+		return conn.ProcessID != 0
+	case controller.PromptTargetUserID:
 		return true
+	case controller.PromptTargetChecksumMD5:
+		return strings.TrimSpace(conn.ProcessChecksums[operandChecksumMD5]) != ""
 	default:
 		return false
 	}
@@ -929,18 +1086,20 @@ func targetAvailable(conn state.Connection, target controller.PromptTarget) bool
 
 func bestAvailableTarget(conn state.Connection) controller.PromptTarget {
 	switch {
-	case conn.ProcessPath != "":
+	case strings.TrimSpace(conn.ProcessPath) != "":
 		return controller.PromptTargetProcessPath
-	case len(conn.ProcessArgs) > 0:
+	case strings.TrimSpace(strings.Join(conn.ProcessArgs, " ")) != "":
 		return controller.PromptTargetProcessCmd
-	case conn.DstHost != "":
+	case strings.TrimSpace(conn.DstHost) != "":
 		return controller.PromptTargetDestinationHost
-	case conn.DstIP != "":
+	case strings.TrimSpace(conn.DstIP) != "":
 		return controller.PromptTargetDestinationIP
 	case conn.DstPort != 0:
 		return controller.PromptTargetDestinationPort
-	default:
+	case conn.ProcessID != 0:
 		return controller.PromptTargetProcessID
+	default:
+		return controller.PromptTargetUserID
 	}
 }
 

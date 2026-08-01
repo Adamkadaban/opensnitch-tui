@@ -66,10 +66,16 @@ type SettingsManager interface {
 
 // PromptDecision captures an operator's selection for a pending prompt.
 type PromptDecision struct {
-	PromptID string
-	Action   PromptAction
-	Duration PromptDuration
-	Target   PromptTarget
+	PromptID   string
+	Action     PromptAction
+	Duration   PromptDuration
+	Target     PromptTarget
+	Conditions []PromptCondition
+}
+
+// PromptCondition adds an exact match from the pending connection to a rule.
+type PromptCondition struct {
+	Target PromptTarget
 }
 
 type PromptAction string
@@ -84,6 +90,12 @@ type PromptDuration string
 
 const (
 	PromptDurationOnce         PromptDuration = "once"
+	PromptDuration30Seconds    PromptDuration = "30s"
+	PromptDuration5Minutes     PromptDuration = "5m"
+	PromptDuration15Minutes    PromptDuration = "15m"
+	PromptDuration30Minutes    PromptDuration = "30m"
+	PromptDuration1Hour        PromptDuration = "1h"
+	PromptDuration12Hours      PromptDuration = "12h"
 	PromptDurationUntilRestart PromptDuration = "until restart"
 	PromptDurationAlways       PromptDuration = "always"
 )
@@ -98,4 +110,5 @@ const (
 	PromptTargetDestinationIP   PromptTarget = "dest.ip"
 	PromptTargetDestinationHost PromptTarget = "dest.host"
 	PromptTargetDestinationPort PromptTarget = "dest.port"
+	PromptTargetChecksumMD5     PromptTarget = "process.hash.md5"
 )

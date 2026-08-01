@@ -66,6 +66,12 @@ var promptActions = []widget.Option{
 
 var promptDurations = []widget.Option{
 	{Label: "Once", Value: "once"},
+	{Label: "30 seconds", Value: "30s"},
+	{Label: "5 minutes", Value: "5m"},
+	{Label: "15 minutes", Value: "15m"},
+	{Label: "30 minutes", Value: "30m"},
+	{Label: "1 hour", Value: "1h"},
+	{Label: "12 hours", Value: "12h"},
 	{Label: "Until restart", Value: "until restart"},
 	{Label: "Always", Value: "always"},
 }

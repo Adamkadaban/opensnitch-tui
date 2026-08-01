@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -252,12 +253,19 @@ const (
 	fieldAction field = iota
 	fieldDuration
 	fieldTarget
+	fieldConditions
 )
 
 type formState struct {
-	action   int
-	duration int
-	target   int
+	action          int
+	duration        int
+	target          int
+	advanced        bool
+	condition       int
+	conditionOffset int
+	selected        map[controller.PromptTarget]bool
+	submitting      bool
+	status          string
 }
 
 type actionOption struct {
@@ -275,6 +283,12 @@ type targetOption struct {
 	value controller.PromptTarget
 }
 
+type conditionOption struct {
+	label     string
+	value     controller.PromptTarget
+	available bool
+}
+
 var actionOptions = []actionOption{
 	{label: "Allow", value: controller.PromptActionAllow},
 	{label: "Deny", value: controller.PromptActionDeny},
@@ -283,6 +297,12 @@ var actionOptions = []actionOption{
 
 var durationOptions = []durationOption{
 	{label: "Once", value: controller.PromptDurationOnce},
+	{label: "30s", value: controller.PromptDuration30Seconds},
+	{label: "5m", value: controller.PromptDuration5Minutes},
+	{label: "15m", value: controller.PromptDuration15Minutes},
+	{label: "30m", value: controller.PromptDuration30Minutes},
+	{label: "1h", value: controller.PromptDuration1Hour},
+	{label: "12h", value: controller.PromptDuration12Hours},
 	{label: "Until restart", value: controller.PromptDurationUntilRestart},
 	{label: "Always", value: controller.PromptDurationAlways},
 }
@@ -364,21 +384,38 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 			local := isLocalNode(snapshot.Nodes, prompt.NodeID)
 			cmd := m.toggleInspect(prompt, snapshot.Settings, local)
 			return cmd, true
-		case "down":
-			m.focus = (m.focus + 1) % 3
-			return nil, true
-		case "up":
-			m.focus--
-			if m.focus < 0 {
+		case "v":
+			form.advanced = !form.advanced
+			if !form.advanced && m.focus == fieldConditions {
 				m.focus = fieldTarget
 			}
 			return nil, true
+		case "down":
+			m.moveFocus(1, form, len(extraConditionOptions(prompt.Connection)))
+			return nil, true
+		case "up":
+			m.moveFocus(-1, form, len(extraConditionOptions(prompt.Connection)))
+			return nil, true
 		case "left":
-			m.stepSelection(-1, form, len(targets))
+			if form.advanced && m.focus == fieldConditions {
+				m.toggleCondition(prompt.Connection, targets, form)
+			} else {
+				m.stepSelection(-1, form, len(targets))
+			}
 			return nil, true
 		case "right":
-			m.stepSelection(1, form, len(targets))
+			if form.advanced && m.focus == fieldConditions {
+				m.toggleCondition(prompt.Connection, targets, form)
+			} else {
+				m.stepSelection(1, form, len(targets))
+			}
 			return nil, true
+		case " ":
+			if form.advanced && m.focus == fieldConditions {
+				m.toggleCondition(prompt.Connection, targets, form)
+				return nil, true
+			}
+			return nil, false
 		case "a":
 			form.action = 0
 			return nil, true
@@ -394,14 +431,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 		case "]":
 			m.shiftPrompt(1)
 			return nil, true
-		case "enter", "esc":
-			if m.inspect {
-				local := isLocalNode(snapshot.Nodes, prompt.NodeID)
-				cmd := m.toggleInspect(prompt, snapshot.Settings, local)
-				return cmd, true
+		case "enter":
+			if form.advanced && m.focus == fieldConditions {
+				m.toggleCondition(prompt.Connection, targets, form)
+				return nil, true
 			}
-			m.submit(prompt, targets, form)
-			return nil, true
+			return m.submit(prompt, targets, form), true
+		case "esc":
+			return m.submit(prompt, targets, form), true
 		}
 	case yaraResultMsg:
 		if !m.inspect || key.promptID != m.activeID {
@@ -419,6 +456,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Cmd, bool) {
 				lines = append(lines, m.theme.Danger.Render(" - "+match.Rule))
 			}
 			m.insertInspectLinesBefore(func(line string) bool { return strings.HasPrefix(line, "Process Tree:") }, lines...)
+		}
+		return nil, true
+	case promptDecisionResultMsg:
+		form := m.forms[key.promptID]
+		if form == nil {
+			return nil, true
+		}
+		form.submitting = false
+		if key.err != nil {
+			form.status = m.theme.Danger.Render(fmt.Sprintf("Failed to send decision: %v", key.err))
+		} else {
+			form.status = m.theme.Success.Render(fmt.Sprintf("Action %s sent", key.decision.Action))
+		}
+		if key.promptID == m.activeID {
+			m.status = form.status
 		}
 		return nil, true
 	}
@@ -477,16 +529,17 @@ func (m *Model) View() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, card.Render(body))
 	}
 
-	headline := fmt.Sprintf("Connection prompt · %s · node %s", prompt.ID, prompt.NodeName)
+	headline := util.TruncateString(fmt.Sprintf("Connection prompt · %s · node %s", prompt.ID, prompt.NodeName), m.promptContentWidth())
 	dest := prompt.Connection.DstHost
 	if dest == "" {
 		dest = prompt.Connection.DstIP
 	}
-	command := strings.Join(prompt.Connection.ProcessArgs, " ")
+	contentWidth := m.promptContentWidth()
+	command := commandLine(prompt.Connection)
 	info := []string{
-		fmt.Sprintf("Process: %s", util.Fallback(prompt.Connection.ProcessPath, "unknown")),
-		fmt.Sprintf("Command: %s", util.Fallback(command, "-")),
-		fmt.Sprintf("Destination: %s:%d (%s)", util.Fallback(dest, "unknown"), prompt.Connection.DstPort, prompt.Connection.Protocol),
+		util.TruncateString(fmt.Sprintf("Process: %s", util.Fallback(prompt.Connection.ProcessPath, "unknown")), contentWidth),
+		util.TruncateString(fmt.Sprintf("Command: %s", util.Fallback(command, "-")), contentWidth),
+		util.TruncateString(fmt.Sprintf("Destination: %s:%d (%s)", util.Fallback(dest, "unknown"), prompt.Connection.DstPort, prompt.Connection.Protocol), contentWidth),
 		fmt.Sprintf("User %d · PID %d", prompt.Connection.UserID, prompt.Connection.ProcessID),
 	}
 
@@ -494,7 +547,22 @@ func (m *Model) View() string {
 	durationRow := m.renderChoices("Duration", mapDurationLabels(durationOptions), form.duration, m.focus == fieldDuration)
 	targetRow := m.renderChoices("Target", mapTargetLabels(targets), form.target, m.focus == fieldTarget)
 
-	controls := m.theme.Subtle.Render("↑/↓ move · ←/→ change · enter confirm · i inspect · [/] cycle prompts")
+	rows := []string{
+		m.theme.Header.Render(headline),
+		strings.Join(info, "\n"),
+		actionRow,
+		durationRow,
+		targetRow,
+	}
+	if form.advanced {
+		rows = append(rows, m.renderConditions(prompt.Connection, targets, form))
+	}
+	rows = append(rows, m.theme.Subtle.Render("Rule: "+m.rulePreview(prompt.Connection, targets, form)))
+	controls := "↑/↓ move · ←/→ change · enter confirm · v advanced · i inspect · [/] prompts"
+	if form.advanced {
+		controls = "↑/↓ move · ←/→/space toggle · enter confirm/toggle · v basic · i inspect · [/] prompts"
+	}
+	rows = append(rows, m.theme.Subtle.Render(controls))
 	expiresAt := prompt.ExpiresAt
 	if expiresAt.IsZero() && !prompt.RequestedAt.IsZero() {
 		timeout := snapshot.Settings.PromptTimeout
@@ -503,7 +571,10 @@ func (m *Model) View() string {
 		}
 		expiresAt = prompt.RequestedAt.Add(timeout)
 	}
-	status := m.status
+	status := form.status
+	if status == "" {
+		status = m.status
+	}
 	if status == "" {
 		if prompt.Paused {
 			remaining := prompt.Remaining
@@ -519,18 +590,9 @@ func (m *Model) View() string {
 			status = fmt.Sprintf("Timeout in %s", remaining.Round(time.Second))
 		}
 	}
-
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		m.theme.Header.Render(headline),
-		strings.Join(info, "\n"),
-		actionRow,
-		durationRow,
-		targetRow,
-		controls,
-		status,
-	)
-
-	return lipgloss.Place(m.width, max(10, m.height-2), lipgloss.Center, lipgloss.Center, m.theme.Card.Width(min(m.width-4, 96)).Render(body))
+	rows = append(rows, status)
+	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return lipgloss.Place(m.width, max(10, m.height-2), lipgloss.Center, lipgloss.Center, m.theme.Card.Width(contentWidth).Render(body))
 }
 
 func (m *Model) promptStateFromSnapshot(snapshot state.Snapshot) (state.Prompt, []targetOption, *formState, bool) {
@@ -547,10 +609,10 @@ func (m *Model) promptStateFromSnapshot(snapshot state.Snapshot) (state.Prompt, 
 	prompt := snapshot.Prompts[m.promptIdx]
 	if prompt.ID != m.activeID {
 		m.activeID = prompt.ID
-		m.status = ""
 	}
 	targets := targetOptionsFor(prompt.Connection)
 	form := m.ensureForm(prompt.ID, targets)
+	m.status = form.status
 	return prompt, targets, form, true
 }
 
@@ -561,8 +623,12 @@ func (m *Model) ensureForm(id string, targets []targetOption) *formState {
 			action:   m.defaultActionIndex(),
 			duration: m.defaultDurationIndex(),
 			target:   m.defaultTargetIndex(targets),
+			selected: make(map[controller.PromptTarget]bool),
 		}
 		m.forms[id] = form
+	}
+	if form.selected == nil {
+		form.selected = make(map[controller.PromptTarget]bool)
 	}
 	if form.action >= len(actionOptions) {
 		form.action = len(actionOptions) - 1
@@ -607,10 +673,81 @@ func (m *Model) stepSelection(delta int, form *formState, targets int) {
 	}
 }
 
-func (m *Model) submit(prompt state.Prompt, targets []targetOption, form *formState) {
-	if m.controller == nil {
-		m.status = m.theme.Danger.Render("Prompt controller unavailable")
+func (m *Model) moveFocus(delta int, form *formState, conditions int) {
+	if form.advanced && m.focus == fieldConditions && conditions > 0 {
+		next := form.condition + delta
+		if next >= 0 && next < conditions {
+			form.condition = next
+			m.updateConditionOffset(form, conditions)
+			return
+		}
+		if delta < 0 {
+			m.focus = fieldTarget
+		} else {
+			m.focus = fieldAction
+		}
 		return
+	}
+	fieldCount := 3
+	if form.advanced {
+		fieldCount = 4
+	}
+	m.focus = field(util.WrapIndex(int(m.focus), delta, fieldCount))
+	if m.focus == fieldConditions {
+		form.condition = util.WrapIndex(form.condition, 0, max(1, conditions))
+		m.updateConditionOffset(form, conditions)
+	}
+}
+
+func (m *Model) updateConditionOffset(form *formState, conditions int) {
+	visible := m.visibleConditionRows()
+	if form.condition < form.conditionOffset {
+		form.conditionOffset = form.condition
+	}
+	if form.condition >= form.conditionOffset+visible {
+		form.conditionOffset = form.condition - visible + 1
+	}
+	maxOffset := max(0, conditions-visible)
+	form.conditionOffset = min(max(0, form.conditionOffset), maxOffset)
+}
+
+func (m *Model) toggleCondition(conn state.Connection, targets []targetOption, form *formState) {
+	options := extraConditionOptions(conn)
+	if len(options) == 0 {
+		return
+	}
+	form.condition = min(max(0, form.condition), len(options)-1)
+	option := options[form.condition]
+	if !option.available || option.value == selectedTarget(targets, form) {
+		return
+	}
+	form.selected[option.value] = !form.selected[option.value]
+}
+
+type promptDecisionResultMsg struct {
+	promptID string
+	decision controller.PromptDecision
+	err      error
+}
+
+func resolvePromptCmd(ctrl controller.PromptManager, decision controller.PromptDecision) tea.Cmd {
+	return func() tea.Msg {
+		return promptDecisionResultMsg{
+			promptID: decision.PromptID,
+			decision: decision,
+			err:      ctrl.ResolvePrompt(decision),
+		}
+	}
+}
+
+func (m *Model) submit(prompt state.Prompt, targets []targetOption, form *formState) tea.Cmd {
+	if m.controller == nil {
+		form.status = m.theme.Danger.Render("Prompt controller unavailable")
+		m.status = form.status
+		return nil
+	}
+	if form.submitting {
+		return nil
 	}
 	decision := controller.PromptDecision{
 		PromptID: prompt.ID,
@@ -620,11 +757,16 @@ func (m *Model) submit(prompt state.Prompt, targets []targetOption, form *formSt
 	if len(targets) > 0 {
 		decision.Target = targets[min(form.target, len(targets)-1)].value
 	}
-	if err := m.controller.ResolvePrompt(decision); err != nil {
-		m.status = m.theme.Danger.Render(fmt.Sprintf("Failed to send decision: %v", err))
-		return
+	for _, target := range selectedExtraTargets(prompt.Connection, targets, form) {
+		decision.Conditions = append(decision.Conditions, controller.PromptCondition{Target: target})
 	}
-	m.status = m.theme.Success.Render(fmt.Sprintf("Action %s for %s", decision.Action, prompt.NodeName))
+	if decision.Target == controller.PromptTargetProcessCmd && commandNeedsPathCondition(prompt.Connection) {
+		decision.Conditions = append(decision.Conditions, controller.PromptCondition{Target: controller.PromptTargetProcessPath})
+	}
+	form.submitting = true
+	form.status = m.theme.Warning.Render("Sending decision...")
+	m.status = form.status
+	return resolvePromptCmd(m.controller, decision)
 }
 
 func (m *Model) shiftPrompt(delta int) {
@@ -652,29 +794,148 @@ func (m *Model) renderChoices(label string, options []string, selected int, focu
 		}
 		cells[idx] = fmt.Sprintf("%s%s", marker, style.Render(option))
 	}
-	return fmt.Sprintf("%s %s", m.theme.Header.Render(label+":"), strings.Join(cells, " "))
+	prefix := m.theme.Header.Render(label + ":")
+	indent := strings.Repeat(" ", len(label)+2)
+	lines := []string{prefix}
+	for _, cell := range cells {
+		last := len(lines) - 1
+		separator := " "
+		if util.RuneWidth(lines[last])+1+util.RuneWidth(cell) > m.promptContentWidth() {
+			lines = append(lines, indent+cell)
+			continue
+		}
+		lines[last] += separator + cell
+	}
+	return strings.Join(lines, "\n")
 }
 
 func targetOptionsFor(conn state.Connection) []targetOption {
 	options := make([]targetOption, 0, 6)
-	if conn.ProcessPath != "" {
+	if strings.TrimSpace(conn.ProcessPath) != "" {
 		options = append(options, targetOption{label: "Executable", value: controller.PromptTargetProcessPath})
 	}
-	if len(conn.ProcessArgs) > 0 {
+	if commandLine(conn) != "" {
 		options = append(options, targetOption{label: "Command", value: controller.PromptTargetProcessCmd})
 	}
-	if conn.DstHost != "" {
+	if strings.TrimSpace(conn.DstHost) != "" {
 		options = append(options, targetOption{label: "Destination host", value: controller.PromptTargetDestinationHost})
 	}
-	if conn.DstIP != "" {
+	if strings.TrimSpace(conn.DstIP) != "" {
 		options = append(options, targetOption{label: "Destination IP", value: controller.PromptTargetDestinationIP})
 	}
 	if conn.DstPort != 0 {
 		options = append(options, targetOption{label: "Destination port", value: controller.PromptTargetDestinationPort})
 	}
-	options = append(options, targetOption{label: "Process ID", value: controller.PromptTargetProcessID})
+	if conn.ProcessID != 0 {
+		options = append(options, targetOption{label: "Process ID", value: controller.PromptTargetProcessID})
+	}
 	options = append(options, targetOption{label: "User ID", value: controller.PromptTargetUserID})
 	return options
+}
+
+func extraConditionOptions(conn state.Connection) []conditionOption {
+	return []conditionOption{
+		{label: "Destination IP", value: controller.PromptTargetDestinationIP, available: strings.TrimSpace(conn.DstIP) != ""},
+		{label: "Destination port", value: controller.PromptTargetDestinationPort, available: conn.DstPort != 0},
+		{label: "User ID", value: controller.PromptTargetUserID, available: true},
+		{label: "MD5 checksum", value: controller.PromptTargetChecksumMD5, available: strings.TrimSpace(conn.ProcessChecksums[string(controller.PromptTargetChecksumMD5)]) != ""},
+	}
+}
+
+func selectedTarget(targets []targetOption, form *formState) controller.PromptTarget {
+	if len(targets) == 0 {
+		return ""
+	}
+	return targets[min(max(0, form.target), len(targets)-1)].value
+}
+
+func selectedExtraTargets(conn state.Connection, targets []targetOption, form *formState) []controller.PromptTarget {
+	base := selectedTarget(targets, form)
+	selected := make([]controller.PromptTarget, 0, len(form.selected))
+	for _, option := range extraConditionOptions(conn) {
+		if option.available && option.value != base && form.selected[option.value] {
+			selected = append(selected, option.value)
+		}
+	}
+	return selected
+}
+
+func commandLine(conn state.Connection) string {
+	return strings.TrimSpace(strings.Join(conn.ProcessArgs, " "))
+}
+
+func commandNeedsPathCondition(conn state.Connection) bool {
+	if len(conn.ProcessArgs) == 0 {
+		return false
+	}
+	command := strings.TrimSpace(conn.ProcessArgs[0])
+	return !filepath.IsAbs(command) || strings.HasPrefix(filepath.Clean(command), "/proc/")
+}
+
+func (m *Model) visibleConditionRows() int {
+	return min(4, max(1, m.height-24))
+}
+
+func (m *Model) renderConditions(conn state.Connection, targets []targetOption, form *formState) string {
+	options := extraConditionOptions(conn)
+	m.updateConditionOffset(form, len(options))
+	end := min(len(options), form.conditionOffset+m.visibleConditionRows())
+	lines := []string{m.theme.Header.Render("Extra matches:")}
+	base := selectedTarget(targets, form)
+	for idx := form.conditionOffset; idx < end; idx++ {
+		option := options[idx]
+		marker := "[ ]"
+		label := option.label
+		style := m.theme.TabInactive
+		switch {
+		case !option.available:
+			marker = "[-]"
+			label += " (unavailable)"
+			style = m.theme.Subtle
+		case option.value == base:
+			marker = "[-]"
+			label += " (base)"
+			style = m.theme.Subtle
+		case form.selected[option.value]:
+			marker = "[x]"
+			style = m.theme.TabActive
+		}
+		cursor := " "
+		if m.focus == fieldConditions && idx == form.condition {
+			cursor = m.theme.Warning.Render(">")
+			style = style.Underline(true)
+		}
+		lines = append(lines, fmt.Sprintf("%s%s %s", cursor, marker, style.Render(label)))
+	}
+	if form.conditionOffset > 0 {
+		lines[0] += " ↑"
+	}
+	if end < len(options) {
+		lines[0] += " ↓"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) rulePreview(conn state.Connection, targets []targetOption, form *formState) string {
+	parts := []string{}
+	if base := selectedTarget(targets, form); base != "" {
+		parts = append(parts, string(base))
+		if base == controller.PromptTargetProcessCmd && commandNeedsPathCondition(conn) {
+			parts = append(parts, string(controller.PromptTargetProcessPath))
+		}
+	}
+	for _, target := range selectedExtraTargets(conn, targets, form) {
+		parts = append(parts, string(target))
+	}
+	if len(parts) == 0 {
+		return "no available match"
+	}
+	return strings.Join(parts, " + ")
+}
+
+func (m *Model) promptContentWidth() int {
+	frameWidth, _ := m.theme.Card.GetFrameSize()
+	return max(20, min(96-frameWidth, m.width-frameWidth-2))
 }
 
 func mapActionLabels(opts []actionOption) []string {

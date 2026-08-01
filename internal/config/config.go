@@ -178,7 +178,7 @@ func NormalizePromptAction(action string) string {
 // NormalizePromptDuration clamps duration defaults to supported values.
 func NormalizePromptDuration(duration string) string {
 	switch duration {
-	case "once", "until restart", "always":
+	case "once", "30s", "5m", "15m", "30m", "1h", "12h", "until restart", "always":
 		return duration
 	default:
 		return DefaultPromptDuration
